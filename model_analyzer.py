@@ -5,6 +5,9 @@ from roofline_model import roofline_analyze
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
 from utils import str_number, str_number_time
 import math
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ALL_DATA_NAMES = [
     "OPs",
@@ -36,7 +39,8 @@ class ModelAnalyzer:
         assert config_file is not None, "config file is not found, please specify it manually."
         print(f"use config file {config_file} for {model_id}")
         if source == "huggingface":
-            self.model_params = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+            hf_token = os.getenv('HUGGINGFACE_HUB_TOKEN')
+            self.model_params = AutoConfig.from_pretrained(model_id, trust_remote_code=True, token=hf_token)
         else:
             if not os.path.exists(f"model_params/{source}.py"):
                 raise Exception(f"model_params/{source}.py is not found")
