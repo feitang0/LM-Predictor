@@ -1,9 +1,10 @@
 import os
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 from dotenv import load_dotenv
 import torch
 import argparse
-from datetime import datetime
+from deepspeed.profiling.flops_profiler import get_model_profile
+from deepspeed.accelerator import get_accelerator
 
 load_dotenv()
 
@@ -34,17 +35,55 @@ def inspect_model_architecture(model_id):
     return model, config
 
 
-def run_inference_with_hooks(model_id, text="Hello world", enable_profiling=False, profile_dir="./tensorboard_logs"):
-    """Run inference with hooks to track each layer's progress."""
-    print(f"\n=== Running Inference with Layer Tracking: {model_id} ===")
+def create_fake_kv_cache(model, batch_size, context_len, device='cpu'):
+    """Create fake KV cache for simulating decode phase."""
+    config = model.config
+    num_layers = getattr(config, 'num_hidden_layers', getattr(config, 'n_layer', 32))
+    num_heads = getattr(config, 'num_attention_heads', getattr(config, 'n_head', 32))
+    hidden_size = getattr(config, 'hidden_size', getattr(config, 'd_model', 4096))
+    head_dim = hidden_size // num_heads
     
-    # Get config and tokenizer
-    config = AutoConfig.from_pretrained(
-        model_id,
-        token=os.getenv('HUGGINGFACE_HUB_TOKEN')
-    )
+    # Get model's dtype to match KV cache dtype
+    model_dtype = next(model.parameters()).dtype
     
-    from transformers import AutoTokenizer
+    try:
+        # Try to use DynamicCache (newer transformers)
+        from transformers import DynamicCache
+        cache = DynamicCache()
+        
+        for layer_idx in range(num_layers):
+            # Create fake key and value tensors with matching dtype
+            # Shape: [batch_size, num_heads, context_len, head_dim]
+            fake_key = torch.randn(batch_size, num_heads, context_len, head_dim, 
+                                 device=device, dtype=model_dtype)
+            fake_value = torch.randn(batch_size, num_heads, context_len, head_dim, 
+                                   device=device, dtype=model_dtype)
+            cache.update(fake_key, fake_value, layer_idx)
+        
+        return cache
+        
+    except ImportError:
+        # Fallback to tuple format for older transformers
+        past_key_values = []
+        for _ in range(num_layers):
+            # Each layer has (key, value) tensors with matching dtype
+            # Shape: [batch_size, num_heads, context_len, head_dim]
+            fake_key = torch.randn(batch_size, num_heads, context_len, head_dim, 
+                                 device=device, dtype=model_dtype)
+            fake_value = torch.randn(batch_size, num_heads, context_len, head_dim, 
+                                   device=device, dtype=model_dtype)
+            past_key_values.append((fake_key, fake_value))
+        
+        return tuple(past_key_values)
+
+
+def profile_prefill_stage(model_id, batch_size=1, seq_len=512):
+    """Profile prefill stage FLOPs - processing initial prompt."""
+    print(f"\n=== Prefill Stage Profiling: {model_id} ===")
+    print(f"Batch size: {batch_size}, Sequence length: {seq_len}")
+    print("🚀 Profiling prefill stage (initial prompt processing)")
+    
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
         token=os.getenv('HUGGINGFACE_HUB_TOKEN')
@@ -52,117 +91,143 @@ def run_inference_with_hooks(model_id, text="Hello world", enable_profiling=Fals
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Create model on actual device
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"Using device: {device}")
-    
-    model = AutoModelForCausalLM.from_config(config)
-    model = model.to(device)
-    model.eval()
-    
-    # Hook to track layer activations
-    layer_outputs = {}
-    def hook_fn(name):
-        def hook(module, input, output):
-            if isinstance(output, tuple):
-                # For layers that return tuples, take the first element
-                activation = output[0]
-            else:
-                activation = output
-            
-            if hasattr(activation, 'shape'):
-                print(f"  {name}: {activation.shape} | {activation.dtype}")
-                layer_outputs[name] = {
-                    'shape': activation.shape,
-                    'dtype': activation.dtype,
-                    'mean': activation.mean().item() if activation.numel() > 0 else 0,
-                    'std': activation.std().item() if activation.numel() > 0 else 0
-                }
-        return hook
-    
-    # Register hooks for all layers
-    hooks = []
-    for name, module in model.named_modules():
-        if len(list(module.children())) == 0:  # Only leaf modules
-            hook = module.register_forward_hook(hook_fn(name))
-            hooks.append(hook)
-    
-    # Tokenize input
-    inputs = tokenizer(text, return_tensors="pt").to(device)
-    print(f"Input text: '{text}'")
-    print(f"Input shape: {inputs.input_ids.shape}")
-    
-    # Run inference
-    print("\nLayer-by-layer progress:")
-    
-    if enable_profiling:
-        # Setup TensorBoard profiling
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_dir = os.path.join(profile_dir, f"profile_{timestamp}")
-        os.makedirs(log_dir, exist_ok=True)
-        print(f"TensorBoard profiling enabled. Logs will be saved to: {log_dir}")
-        print("To view results, run: tensorboard --logdir {}".format(profile_dir))
+    with torch.device("cpu"):
+        # Create model with random weights (no download)
+        config = AutoConfig.from_pretrained(
+            model_id,
+            token=os.getenv('HUGGINGFACE_HUB_TOKEN')
+        )
+        model = AutoModelForCausalLM.from_config(config)
+        model.eval()
         
-        # Profile with detailed trace including matrix operations
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
-            with_flops=True,
-            with_modules=True
-        ) as prof:
-            with torch.no_grad():
-                outputs = model(**inputs)
+        # Create prefill input constructor
+        def prefill_input_constructor():
+            # Create dummy prompt
+            dummy_text = tokenizer.pad_token * (seq_len - 2)
+            inputs = tokenizer(
+                [dummy_text] * batch_size,
+                padding=True,
+                truncation=True,
+                max_length=seq_len,
+                return_tensors="pt"
+            )
+            # Prefill stage: no past_key_values, use_cache=True to generate cache
+            inputs_dict = dict(inputs)
+            inputs_dict['use_cache'] = True
+            return inputs_dict
         
-        # Export traces
-        prof.export_chrome_trace(os.path.join(log_dir, "trace.json"))
-        prof.export_stacks(os.path.join(log_dir, "profiler_stacks.txt"), "self_cpu_time_total")
+        # Profile prefill
+        flops, macs, params = get_model_profile(
+            model=model,
+            kwargs=prefill_input_constructor(),
+            print_profile=True,
+            detailed=True,
+            module_depth=-1,
+            top_modules=3,
+            warm_up=0,  # No warmup needed for FLOP counting
+            as_string=True,
+            output_file=None,
+            ignore_modules=None
+        )
         
-        # Also save TensorBoard format
-        trace_handler = torch.profiler.tensorboard_trace_handler(log_dir)
-        trace_handler(prof)
-    else:
-        with torch.no_grad():
-            outputs = model(**inputs)
+        print(f"\n=== Prefill Summary ===")
+        print(f"Total Parameters: {params}")
+        print(f"Total MACs: {macs}")
+        print(f"Total FLOPs: {flops}")
+        
+        return flops, macs, params
+
+
+def profile_decode_stage(model_id, batch_size=1, context_len=512):
+    """Profile decode stage FLOPs - generating one token with KV cache."""
+    print(f"\n=== Decode Stage Profiling: {model_id} ===")
+    print(f"Batch size: {batch_size}, Context length: {context_len}")
+    print("⚡ Profiling decode stage (single token generation with KV cache)")
     
-    # Print summary
-    print("\nLayer Statistics Summary:")
-    for name, stats in layer_outputs.items():
-        print(f"{name}: shape={stats['shape']}, mean={stats['mean']:.4f}, std={stats['std']:.4f}")
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        token=os.getenv('HUGGINGFACE_HUB_TOKEN')
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    # Clean up hooks
-    for hook in hooks:
-        hook.remove()
-    
-    return outputs, layer_outputs
+    with torch.device("cpu"):
+        # Create model with random weights (no download)
+        config = AutoConfig.from_pretrained(
+            model_id,
+            token=os.getenv('HUGGINGFACE_HUB_TOKEN')
+        )
+        model = AutoModelForCausalLM.from_config(config)
+        model.eval()
+        
+        # Create fake KV cache simulating previous tokens
+        fake_past_kv = create_fake_kv_cache(model, batch_size, context_len, device='cpu')
+        
+        # Create decode input constructor
+        def decode_input_constructor():
+            # Single new token input
+            inputs = tokenizer(
+                [tokenizer.pad_token] * batch_size,
+                return_tensors="pt"
+            )
+            # Decode stage: provide past_key_values and use_cache=True
+            inputs_dict = dict(inputs)
+            inputs_dict['past_key_values'] = fake_past_kv
+            inputs_dict['use_cache'] = True
+            return inputs_dict
+        
+        # Profile decode
+        flops, macs, params = get_model_profile(
+            model=model,
+            kwargs=decode_input_constructor(),
+            print_profile=True,
+            detailed=True,
+            module_depth=-1,
+            top_modules=3,
+            warm_up=0,  # No warmup needed for FLOP counting
+            as_string=True,
+            output_file=None,
+            ignore_modules=None
+        )
+        
+        print(f"\n=== Decode Summary ===")
+        print(f"Total Parameters: {params}")
+        print(f"Total MACs: {macs}")
+        print(f"Total FLOPs: {flops}")
+        print(f"Context length used: {context_len}")
+        
+        return flops, macs, params
 
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Inspect model architecture and run inference with layer tracking')
+    parser = argparse.ArgumentParser(description='Inspect model architecture and profile FLOPs')
     parser.add_argument('--model_id', type=str, default="meta-llama/Llama-2-7b-hf", 
                        help='Model ID to inspect')
-    parser.add_argument('--run_inference', action='store_true',
-                       help='Run inference with layer-by-layer tracking')
-    parser.add_argument('--text', type=str, default="Hello world",
-                       help='Text for inference')
-    parser.add_argument('--enable_profiling', action='store_true',
-                       help='Enable TensorBoard profiling for detailed computation tracking')
-    parser.add_argument('--profile_dir', type=str, default="./tensorboard_logs",
-                       help='Directory to save TensorBoard profiling logs')
+    parser.add_argument('--profile_prefill', action='store_true',
+                       help='Profile prefill stage FLOPs (initial prompt processing)')
+    parser.add_argument('--profile_decode', action='store_true',
+                       help='Profile decode stage FLOPs (single token generation with KV cache)')
+    parser.add_argument('--batch_size', type=int, default=1,
+                       help='Batch size for FLOPs profiling')
+    parser.add_argument('--seq_len', type=int, default=512,
+                       help='Sequence length for prefill profiling')
+    parser.add_argument('--context_len', type=int, default=512,
+                       help='Context length for decode profiling (simulated KV cache size)')
     
     args = parser.parse_args()
     
     # Inspect architecture
     inspect_model_architecture(args.model_id)
     
-    # Run inference with hooks if requested
-    if args.run_inference:
-        run_inference_with_hooks(args.model_id, args.text, args.enable_profiling, args.profile_dir)
+    # Profile prefill stage if requested
+    if args.profile_prefill:
+        profile_prefill_stage(args.model_id, args.batch_size, args.seq_len)
+    
+    # Profile decode stage if requested
+    if args.profile_decode:
+        profile_decode_stage(args.model_id, args.batch_size, args.context_len)
 
 
 if __name__ == "__main__":
