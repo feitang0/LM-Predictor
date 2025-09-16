@@ -3,16 +3,29 @@
 ## Overview
 A comprehensive system to analyze FLOPs (Floating Point Operations) and memory read/write volumes for PyTorch models by building a reusable database of module computation characteristics, leveraging Claude Code agent for complex forward function analysis.
 
-## Motivation
-- **Accuracy**: Analyze actual forward pass code to get precise FLOP and memory counts
-- **Efficiency**: Cache validated analysis functions to avoid re-analyzing common modules
-- **Scalability**: Build once, reuse across all models with same module types
-- **Intelligence**: Use Claude Code agent to understand complex forward functions
-
 ## Architecture
 
+**Pipeline:**
+```
+Model → Analyze Architecture → Recursive Layer-by-Layer Computation → Results
+  ↓              ↓                           ↓                           ↓
+[Input]   Extract Modules           For Each Module:                   Report
+          (layer-by-layer)              ↓
+                                   Known Module?
+                                   ├── Yes: Call generated_modules/ functions
+                                   └── No: Agent Analysis
+                                           ├── Output analyzed JSON
+                                           ├── Store to database
+                                           ├── Generate callable module
+                                           └── Continue computation
+```
+
 ### 1. Module Analysis Database
-A JSON database storing computational characteristics for each PyTorch module type:
+A JSON database storing computational characteristics for each PyTorch module type.
+
+**Formula Syntax:**
+- **Parameters**: `${param_name}` - represent parameters substituted with actual values
+- **Module Calls**: `{ModuleName}` - represent dependent module names for FLOP and memory calculation
 
 ```json
 {
@@ -86,55 +99,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
 }
 ```
 
-### 2. Nested Formula System
-
-The system uses recursive formula evaluation to handle complex module dependencies:
-
-**Formula Syntax:**
-- **Parameters**: `${param_name}` - substituted with actual values
-- **Module Calls**: `{ModuleName}(args)` - recursively evaluated sub-modules (context determines FLOPs vs memory)
-- **Operations**: Standard mathematical expressions
-
-**FLOP Evaluation Flow:**
-```
-TransformerBlock Formula
-├── {MultiHeadAttention}(B, S, hidden_size, num_heads)
-│   ├── 3x {Linear}(B*S, hidden_size, hidden_size)     [Q,K,V projections]
-│   ├── 2 * B * num_heads * S^2 * head_dim            [Attention scores]
-│   └── {Linear}(B*S, hidden_size, hidden_size)       [Output projection]
-├── {LayerNorm}(B*S, hidden_size)
-├── {MLP}(B, S, hidden_size, intermediate_size)
-│   ├── {Linear}(B*S, hidden_size, intermediate_size)  [Up projection]
-│   ├── B * S * intermediate_size                     [Activation FLOPs]
-│   └── {Linear}(B*S, intermediate_size, hidden_size)  [Down projection]
-└── {LayerNorm}(B*S, hidden_size)
-```
-
-**Memory Evaluation Flow:**
-```
-TransformerBlock Memory
-├── {MultiHeadAttention}(B, S, hidden_size, num_heads)
-│   ├── 3x {Linear}(B*S, hidden_size, hidden_size)  [Q,K,V weight reads]
-│   ├── B * num_heads * S^2 * dtype_bytes                  [Attention matrix intermediates]
-│   └── {Linear}(B*S, hidden_size, hidden_size)     [Output weight reads]
-├── {LayerNorm}(B*S, hidden_size)                   [Norm parameters]
-├── {MLP}(B, S, hidden_size, intermediate_size)
-│   ├── {Linear}(B*S, hidden_size, intermediate_size)  [Up weight reads]
-│   └── {Linear}(B*S, intermediate_size, hidden_size)  [Down weight reads]
-└── {LayerNorm}(B*S, hidden_size)                     [Norm parameters]
-```
-
-**Pipeline:**
-```
-Model → Extract Modules → Formula Resolution → Generated Python → Results
-  ↓            ↓                ↓                    ↓              ↓
-[Fixed]   named_modules()  Recursive Eval      Auto-Generated   Report
-                               ↓
-                        Known: Use Cached Database
-                        Unknown: Agent Analysis → Cache to Database
-```
-
-### 3. Core Components
+### 2. Core Components
 
 #### A. Model Analyzer (`model_analyzer.py`)
 - Main entry point for model FLOP/memory analysis
@@ -168,153 +133,57 @@ Model → Extract Modules → Formula Resolution → Generated Python → Result
 - Clean class names: `TorchLinear`, `TransformersLlamaAttention`
 - Recursive formula evaluation with parameter substitution
 
-## Usage Flow
+**File Organization:**
+- One file per module type for clear separation and maintainability
+- Library-based directory structure (`torch/`, `transformers/`) prevents naming conflicts
+- Consistent naming convention: `module_path.py` where dots/underscores become underscores
 
-### 1. Simple Usage
+**Class Structure:**
 ```python
-# User-friendly interface hides complexity
-from generated_modules import compute_flops
+# generated_modules/torch/nn_linear.py
+from ..base import BaseModule
+from typing import Dict, Any
 
-# Analyze single module
-flops = compute_flops("torch.nn.Linear",
-                     batch_elements=2048, input_features=4096, output_features=4096)
+class TorchLinear(BaseModule):
+    """Auto-generated FLOP/memory calculator for torch.nn.Linear"""
 
-# Analyze composite module (automatic recursion)
-flops = compute_flops("transformers.models.llama.modeling_llama.LlamaAttention",
-                     B=1, S=2048, hidden_size=4096, num_heads=32)
+    def compute_flops(self, **params: Dict[str, Any]) -> int:
+        """Calculate FLOPs using agent-analyzed formula"""
+        # Generated from JSON template formula_template
+
+    def compute_memory_reads(self, **params: Dict[str, Any]) -> int:
+        """Calculate memory reads using agent-analyzed formula"""
+
+    def compute_memory_writes(self, **params: Dict[str, Any]) -> int:
+        """Calculate memory writes using agent-analyzed formula"""
+
+    def compute_intermediates(self, **params: Dict[str, Any]) -> int:
+        """Calculate intermediate memory using agent-analyzed formula"""
 ```
-
-### 2. Full Model Analysis
-```python
-# Extract all modules from model
-model = load_model_on_meta_device(model_id)
-analyzer = FlopAnalyzer()
-
-total_flops = 0
-for module_name, module in model.named_modules():
-    if is_leaf_module(module):
-        # Get fully qualified module path
-        module_path = f"{module.__class__.__module__}.{module.__class__.__name__}"
-
-        # Registry automatically handles dependencies
-        params = extract_module_parameters(module)
-        flops = analyzer.compute_flops(module_path, **params)
-        total_flops += flops
-```
-
-### 3. Recursive Formula Resolution
-```python
-# Example: TransformerBlock evaluation
-# 1. Load "TransformerBlock" template from JSON
-# 2. Parse: "{MultiHeadAttention}(B, S, hidden_size, num_heads) + ..."
-# 3. Recursively resolve MultiHeadAttention:
-#    - Load "MultiHeadAttention" template
-#    - Parse: "3 * {Linear}(B*S, hidden_size, hidden_size) + ..."
-#    - Resolve Linear (leaf module): "2 * batch_elements * input_features * output_features"
-# 4. Substitute parameters and compute final result
-```
-
-### 4. Complete Evaluation Example
-
-**Input:** `compute_flops("TransformerBlock", B=1, S=2048, hidden_size=4096, num_heads=32, intermediate_size=11008)`
-
-**Step-by-step Resolution:**
-```
-TransformerBlock(1, 2048, 4096, 32, 11008):
-├── {MultiHeadAttention}(1, 2048, 4096, 32):
-│   ├── 3x {Linear}(2048, 4096, 4096):
-│   │   └── 3 × (2 * 2048 * 4096 * 4096) = 206,158,430,208
-│   ├── Attention: 2 * 1 * 32 * 2048 * 2048 * 128 = 34,359,738,368
-│   └── {Linear}(2048, 4096, 4096):
-│       └── 2 * 2048 * 4096 * 4096 = 68,719,476,736
-│   Total: 309,237,645,312
-├── {LayerNorm}(2048, 4096):
-│   └── 5 * 2048 * 4096 = 41,943,040
-├── {MLP}(1, 2048, 4096, 11008):
-│   ├── {Linear}(2048, 4096, 11008): 184,885,575,680
-│   ├── Activation: 1 * 2048 * 11008 = 22,544,384
-│   └── {Linear}(2048, 11008, 4096): 184,885,575,680
-│   Total: 369,793,695,744
-└── {LayerNorm}(2048, 4096): 41,943,040
-
-Final: 679,115,227,136 FLOPs
-```
-
-### 5. Agent Analysis for Unknown Modules
-```python
-# When encountering unknown module:
-# 1. Agent searches for source code in transformers/pytorch
-# 2. Analyzes forward() method implementation
-# 3. Generates formula template (not code!) for safety
-# 4. Outputs JSON entry: {"formula_template": "...", "parameters": [...]}
-# 5. Registry generates Python module from template
-# 6. Result cached for future use
-```
-
-## Benefits
-
-1. **Accuracy**: Based on actual forward pass code analysis for both FLOPs and memory
-2. **Efficiency**: O(1) lookup for analyzed modules vs O(n) code analysis
-3. **Intelligence**: Claude Code understands complex implementations
-4. **Transparency**: Thinking process documented for each analysis
-5. **Extensibility**: Automatically handles new module types
-6. **Reproducibility**: Same analysis across different researchers
 
 ## File Structure
 
 ```
 LM-Predictor/
-├── model_inspect.py          # Model architecture extraction
-├── compute_analyzer.py       # FLOP/memory computation with cache
-├── module_analyzer_agent.py  # Claude Code agent integration
-├── module_db.json           # Module analysis database (templates only)
-├── generated_modules/        # Generated Python modules
-│   ├── __init__.py          # Registry and convenience functions
-│   ├── registry.py          # ModuleRegistry with auto-discovery
-│   ├── base.py             # BaseModule abstract class
-│   ├── torch/              # PyTorch core modules
-│   │   ├── nn_linear.py    # torch.nn.Linear → TorchLinear
+├── model_analyzer.py        # Main entry point for model FLOP/memory analysis
+├── module_analyzer.py       # Cache-first module analysis with Claude Code agent fallback
+├── module_db.json          # Module analysis database (formula templates only)
+├── generated_modules/       # Generated Python modules
+│   ├── __init__.py         # Registry and convenience functions
+│   ├── registry.py         # ModuleRegistry with auto-discovery
+│   ├── base.py            # BaseModule abstract class
+│   ├── torch/             # PyTorch core modules
+│   │   ├── nn_linear.py   # torch.nn.Linear → TorchLinear
 │   │   ├── nn_layer_norm.py # torch.nn.LayerNorm → TorchLayerNorm
 │   │   └── ...
-│   └── transformers/       # Transformers library modules
+│   └── transformers/      # Transformers library modules
 │       ├── models_llama_modeling_llama_llama_attention.py
 │       ├── models_bert_modeling_bert_bert_attention.py
 │       └── ...
 ├── transformers/          # Submodule for source code analysis
+├── pytorch/               # Submodule for source code analysis
 ├── DESIGN.md             # This documentation
 ├── PROGRESS.md           # Implementation tracking
 ├── SCRATCHPAD.md         # Working notes and issues
 └── CLAUDE.md            # Development environment and commands
 ```
-
-**Key Features:**
-- **Library namespacing**: Separate directories prevent naming conflicts
-- **Auto-generation**: Python modules generated from JSON templates
-- **Registry system**: Automatic discovery and dependency resolution
-- **Clean imports**: Simple `from generated_modules import compute_flops`
-
-## Commands
-
-- `uv run python model_inspect.py --model_id <model>` - Extract model architecture with full paths
-- `uv run python model_inspect.py --model_id <model> --flops --batch_size <B> --seq_len <S>` - Complete FLOP/memory analysis using registry
-- `uv run python module_analyzer_agent.py --module <ModuleName>` - Generate formula template for unknown module
-
-**Usage Examples:**
-```bash
-# Basic model analysis
-uv run python model_inspect.py --model_id meta-llama/Llama-2-7b-hf
-
-# Full FLOP/memory analysis with nested evaluation
-uv run python model_inspect.py --model_id meta-llama/Llama-2-7b-hf --flops --batch_size 1 --seq_len 2048
-
-# Analyze specific unknown module (agent will search for it)
-uv run python module_analyzer_agent.py --module LlamaRMSNorm
-```
-
-This system combines **formula templates** for safety, **nested evaluation** for composability, **library namespacing** for conflict resolution, and **Claude Code agent intelligence** for automatic FLOP/memory analysis of unknown modules.
-
-## Related Documentation
-
-- **[CLAUDE.md](CLAUDE.md)** - Environment setup, commands, and coding guidelines for development
-- **[PROGRESS.md](PROGRESS.md)** - Implementation milestones, current progress, and completion tracking
-- **[SCRATCHPAD.md](SCRATCHPAD.md)** - Active issues, debugging notes, and experimental ideas
