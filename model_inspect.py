@@ -75,7 +75,7 @@ def main():
                        help='Model ID to inspect')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for FLOP analysis')
     parser.add_argument('--seq_len', type=int, default=2048, help='Sequence length for FLOP analysis')
-    parser.add_argument('--flops', action='store_true', help='Run FLOP and memory analysis')
+    parser.add_argument('--analyze', action='store_true', help='Run FLOP and memory analysis')
     
     args = parser.parse_args()
     
@@ -83,7 +83,7 @@ def main():
     inspect_model_architecture(args.model_id)
     
     # Additionally run FLOP analysis if requested
-    if args.flops:
+    if args.analyze:
         analyze_model_flops(args.model_id, args.batch_size, args.seq_len)
 
 

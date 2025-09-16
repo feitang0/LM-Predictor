@@ -27,7 +27,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
       "thinking_process": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs...",
       "parameters": ["B", "S", "hidden_size", "num_heads"],
       "formula_template": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-      "module_calls": ["torch__nn__Linear"],
+      "module_depends": ["torch__nn__Linear"],
       "breakdown": {
         "q_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
         "k_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
@@ -41,7 +41,8 @@ A JSON database storing computational characteristics for each PyTorch module ty
       "parameters": ["B", "S", "hidden_size", "dtype_bytes"],
       "reads_template": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
       "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}"
+      "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
+      "module_depends": ["torch__nn__Linear"]
     },
     "validation": {
       "status": "pending",
@@ -62,7 +63,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
       "thinking_process": "Standard matrix multiplication: input @ weight.T",
       "parameters": ["B", "S", "input_features", "output_features"],
       "formula_template": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
-      "module_calls": [],
+      "module_depends": [],
       "breakdown": {
         "matrix_multiply": "2 * ${B} * ${S} * ${input_features} * ${output_features}"
       }
@@ -72,7 +73,8 @@ A JSON database storing computational characteristics for each PyTorch module ty
       "parameters": ["B", "S", "input_features", "output_features", "dtype_bytes"],
       "reads_template": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
       "writes_template": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
-      "intermediates_template": "0"
+      "intermediates_template": "0",
+      "module_depends": []
     },
     "validation": {
       "status": "validated",
@@ -90,8 +92,7 @@ The system uses recursive formula evaluation to handle complex module dependenci
 
 **Formula Syntax:**
 - **Parameters**: `${param_name}` - substituted with actual values
-- **Module Calls**: `{ModuleName}(args)` - recursively evaluated sub-modules for FLOPs
-- **Memory Calls**: `{ModuleName}_memory(args)` - recursively evaluated sub-modules for memory
+- **Module Calls**: `{ModuleName}(args)` - recursively evaluated sub-modules (context determines FLOPs vs memory)
 - **Operations**: Standard mathematical expressions
 
 **FLOP Evaluation Flow:**
@@ -112,15 +113,15 @@ TransformerBlock Formula
 **Memory Evaluation Flow:**
 ```
 TransformerBlock Memory
-├── {MultiHeadAttention}_memory(B, S, hidden_size, num_heads)
-│   ├── 3x {Linear}_memory(B*S, hidden_size, hidden_size)  [Q,K,V weight reads]
+├── {MultiHeadAttention}(B, S, hidden_size, num_heads)
+│   ├── 3x {Linear}(B*S, hidden_size, hidden_size)  [Q,K,V weight reads]
 │   ├── B * num_heads * S^2 * dtype_bytes                  [Attention matrix intermediates]
-│   └── {Linear}_memory(B*S, hidden_size, hidden_size)     [Output weight reads]
-├── {LayerNorm}_memory(B*S, hidden_size)                   [Norm parameters]
-├── {MLP}_memory(B, S, hidden_size, intermediate_size)
-│   ├── {Linear}_memory(B*S, hidden_size, intermediate_size)  [Up weight reads]
-│   └── {Linear}_memory(B*S, intermediate_size, hidden_size)  [Down weight reads]
-└── {LayerNorm}_memory(B*S, hidden_size)                     [Norm parameters]
+│   └── {Linear}(B*S, hidden_size, hidden_size)     [Output weight reads]
+├── {LayerNorm}(B*S, hidden_size)                   [Norm parameters]
+├── {MLP}(B, S, hidden_size, intermediate_size)
+│   ├── {Linear}(B*S, hidden_size, intermediate_size)  [Up weight reads]
+│   └── {Linear}(B*S, intermediate_size, hidden_size)  [Down weight reads]
+└── {LayerNorm}(B*S, hidden_size)                     [Norm parameters]
 ```
 
 **Pipeline:**
@@ -129,46 +130,43 @@ Model → Extract Modules → Formula Resolution → Generated Python → Result
   ↓            ↓                ↓                    ↓              ↓
 [Fixed]   named_modules()  Recursive Eval      Auto-Generated   Report
                                ↓
-                        Known: Use Template
-                        Unknown: Agent Analysis
+                        Known: Use Cached Database
+                        Unknown: Agent Analysis → Cache to Database
 ```
 
 ### 3. Core Components
 
-#### A. Model Inspector (`model_inspect.py`)
+#### A. Model Analyzer (`model_analyzer.py`)
+- Main entry point for model FLOP/memory analysis
 - Extract model architecture as nested dict with fully qualified class names
 - Build module inventory with library.path.to.ClassName format
 - Extract module parameters (hidden_size, num_heads, etc.) for formula substitution
+- Orchestrate the entire analysis pipeline and generate comprehensive reports
 
-#### B. Module Database (`module_db.json`)
-- Store formula templates using `${param}` and `{Module}()` syntax
+#### B. Module Analyzer (`module_analyzer.py`)
+- Cache-first module analysis: check database before using agent
+- For known modules: use cached formula templates from database
+- For unknown modules: analyze using Claude Code agent → cache to database
+- Generate safe JSON formula templates (not executable code)
+- Focus on template generation and database management
+
+#### C. Module Database (`module_db.json`)
+- Store formula templates using `${param}` and `{Module}()` syntax (same for FLOP and memory)
 - Include thinking process documentation for transparency
 - Track original module paths and code locations
 - Maintain validation status and dependency graphs
 
-#### C. Module Registry (`generated_modules/registry.py`)
+#### D. Module Registry (`generated_modules/registry.py`)
 - Auto-discover generated module classes using library namespacing
 - Resolve module dependencies with circular detection
 - Handle path-to-name conversion: `torch.nn.Linear` → `torch__nn__Linear`
 - Provide user-friendly interface: `compute_flops("torch.nn.Linear", ...)`
 
-#### D. Generated Modules (`generated_modules/*/`)
+#### E. Generated Modules (`generated_modules/*/`)
 - Python classes auto-generated from JSON formula templates
 - Library-organized directory structure prevents naming conflicts
 - Clean class names: `TorchLinear`, `TransformersLlamaAttention`
 - Recursive formula evaluation with parameter substitution
-
-#### E. Claude Code Agent (`module_analyzer_agent.py`)
-- Analyze unknown modules using Claude Code in headless mode
-- Generate formula templates (not executable code) for safety
-- Output safe JSON entries for database storage
-- Focus on template generation rather than direct code execution
-
-#### F. Compute Analyzer (`compute_analyzer.py`)
-- Orchestrate the entire FLOP/memory analysis pipeline
-- Use registry to resolve module dependencies automatically
-- Aggregate recursive formula results for both FLOPs and memory
-- Generate comprehensive reports with breakdown
 
 ## Usage Flow
 

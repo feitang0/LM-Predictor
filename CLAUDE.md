@@ -12,9 +12,9 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 ## Common Commands
 
-- `uv run python model_inspect.py --model_id <model>` - Extract model architecture
-- `uv run python model_inspect.py --model_id <model> --flops --batch_size <B> --seq_len <S>` - Full FLOP/memory analysis
-- `uv run python module_analyzer_agent.py --module <ModuleName>` - Analyze unknown module (agent searches for it)
+- `uv run python model_analyzer.py --model_id <model>` - Extract model architecture
+- `uv run python model_analyzer.py --model_id <model> --analyze --batch_size <B> --seq_len <S>` - Full FLOP/memory analysis
+- `uv run python module_analyzer.py --module <ModuleName>` - Analyze unknown module (cache-first, agent fallback)
 - `uv run python -m pytest` - Run tests (when implemented)
 
 ## Code Style
@@ -27,9 +27,8 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 ## Key Files
 
-- `model_inspect.py` - Main entry point for model analysis
-- `compute_analyzer.py` - FLOP/memory computation with registry system
-- `module_analyzer_agent.py` - Claude Code integration for unknown modules
+- `model_analyzer.py` - Main entry point for model FLOP/memory analysis
+- `module_analyzer.py` - Cache-first module analysis with Claude Code agent fallback
 - `module_db.json` - Formula template cache (starts empty, populated by agent)
 - `generated_modules/` - Auto-generated Python modules from templates
 - `DESIGN.md` - System architecture and design decisions
@@ -38,7 +37,7 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 ## Architecture Overview
 
-1. **Formula Templates**: JSON templates with `${param}` and `{Module}()` syntax
+1. **Formula Templates**: JSON templates with `${param}` and `{Module}()` syntax (unified for FLOP/memory)
 2. **Nested Evaluation**: Recursive resolution of module dependencies
 3. **Library Namespacing**: `torch__nn__Linear` format prevents naming conflicts
 4. **Agent Integration**: Claude Code analyzes unknown modules automatically
@@ -48,5 +47,5 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 - NEVER store executable code in JSON - only formula templates
 - Use registry system for module resolution: `compute_flops("torch.nn.Linear", ...)`, `compute_memory("torch.nn.Linear", ...)`
-- Formula parameters use `${param}` syntax, module calls use `{Module}()` syntax
+- Formula parameters use `${param}` syntax, module calls use `{Module}()` syntax (same for FLOP and memory templates)
 - All separators (dots and underscores) become double underscores: `torch.nn.Linear` → `torch__nn__Linear`
