@@ -1,0 +1,243 @@
+{
+  "schema_version": "1.0",
+  "description": "Database schema for storing PyTorch module FLOP and memory analysis functions",
+  
+  "module_entry": {
+    "module_class": {
+      "type": "string",
+      "description": "PyTorch module class name (e.g., 'LlamaAttention', 'Linear')",
+      "required": true
+    },
+    "module_path": {
+      "type": "string", 
+      "description": "Full Python import path to the module class",
+      "example": "transformers.models.llama.modeling_llama"
+    },
+    "aliases": {
+      "type": "array",
+      "description": "Alternative class names that map to the same analysis",
+      "example": ["LlamaAttention", "LlamaSdpaAttention", "LlamaFlashAttention2"]
+    },
+    
+    "code_location": {
+      "file": {
+        "type": "string",
+        "description": "Relative path to source file from project root"
+      },
+      "line_start": {
+        "type": "integer",
+        "description": "Starting line number of class definition"
+      },
+      "line_end": {
+        "type": "integer", 
+        "description": "Ending line number of class definition"
+      },
+      "git_hash": {
+        "type": "string",
+        "description": "Git commit hash when analysis was performed"
+      }
+    },
+    
+    "forward_method": {
+      "line_start": {
+        "type": "integer",
+        "description": "Starting line of forward method"
+      },
+      "line_end": {
+        "type": "integer",
+        "description": "Ending line of forward method"  
+      },
+      "code_snippet": {
+        "type": "string",
+        "description": "Key parts of forward method code for verification"
+      },
+      "signature": {
+        "type": "string",
+        "description": "Forward method signature",
+        "example": "forward(self, hidden_states, attention_mask=None, ...)"
+      }
+    },
+    
+    "flop_function": {
+      "parameters": {
+        "type": "array",
+        "description": "List of parameter names needed for FLOP calculation",
+        "example": ["batch_size", "seq_len", "hidden_size", "num_heads", "head_dim"]
+      },
+      "formula": {
+        "type": "string", 
+        "description": "Mathematical formula for total FLOPs",
+        "example": "8 * B * S * hidden_size^2 + 16608 * B * S^2"
+      },
+      "function_code": {
+        "type": "string",
+        "description": "Python function implementation for FLOP counting"
+      },
+      "breakdown": {
+        "type": "object",
+        "description": "FLOP breakdown by operation/submodule",
+        "example": {
+          "q_proj": "2 * B * S * hidden_size^2",
+          "k_proj": "2 * B * S * hidden_size^2",
+          "attention": "16608 * B * S^2"
+        }
+      },
+      "complexity": {
+        "time": {
+          "type": "string",
+          "description": "Time complexity in Big O notation",
+          "example": "O(B * S^2 * hidden_size)"
+        },
+        "dominant_term": {
+          "type": "string", 
+          "description": "Most expensive operation",
+          "example": "attention_scores"
+        }
+      }
+    },
+    
+    "memory_function": {
+      "parameters": {
+        "type": "array",
+        "description": "Parameters needed for memory calculation"
+      },
+      "reads": {
+        "type": "string",
+        "description": "Formula for memory reads in bytes"
+      },
+      "writes": {
+        "type": "string", 
+        "description": "Formula for memory writes in bytes"
+      },
+      "peak_memory": {
+        "type": "string",
+        "description": "Peak memory usage during forward pass"
+      },
+      "intermediates": {
+        "type": "string",
+        "description": "Intermediate tensor memory requirements"
+      }
+    },
+    
+    "validation": {
+      "status": {
+        "type": "string",
+        "enum": ["pending", "validated", "deprecated", "failed"],
+        "description": "Validation status of the analysis function"
+      },
+      "validator": {
+        "type": "string",
+        "description": "Name/ID of person who validated the function"
+      },
+      "date": {
+        "type": "string",
+        "format": "YYYY-MM-DD",
+        "description": "Date of validation"
+      },
+      "method": {
+        "type": "string",
+        "enum": ["manual_review", "profiler_comparison", "automated_test"],
+        "description": "Validation method used"
+      },
+      "test_cases": {
+        "type": "array",
+        "description": "Test cases used for validation",
+        "items": {
+          "type": "object",
+          "properties": {
+            "input_params": {
+              "type": "object",
+              "description": "Input parameters for test case"
+            },
+            "expected_flops": {
+              "type": "integer",
+              "description": "Expected FLOP count"
+            },
+            "expected_memory": {
+              "type": "integer", 
+              "description": "Expected memory usage in bytes"
+            },
+            "tolerance": {
+              "type": "number",
+              "description": "Acceptable error percentage",
+              "default": 0.01
+            }
+          }
+        }
+      },
+      "notes": {
+        "type": "string",
+        "description": "Additional validation notes or caveats"
+      }
+    },
+    
+    "dependencies": {
+      "type": "array",
+      "description": "Other modules/functions this module depends on",
+      "example": ["torch.nn.Linear", "apply_rotary_pos_emb", "eager_attention_forward"]
+    },
+    
+    "metadata": {
+      "created_date": {
+        "type": "string",
+        "format": "YYYY-MM-DD",
+        "description": "When this entry was created"
+      },
+      "last_updated": {
+        "type": "string", 
+        "format": "YYYY-MM-DD",
+        "description": "When this entry was last modified"
+      },
+      "author": {
+        "type": "string",
+        "description": "Person who created this analysis"
+      },
+      "model_families": {
+        "type": "array",
+        "description": "Model families this module appears in",
+        "example": ["llama", "mistral", "qwen"]
+      },
+      "tags": {
+        "type": "array",
+        "description": "Searchable tags",
+        "example": ["attention", "linear", "activation", "normalization"]
+      }
+    }
+  },
+
+  "example_entries": [
+    {
+      "module_class": "Linear",
+      "flop_function": {
+        "formula": "2 * B * S * in_features * out_features",
+        "parameters": ["batch_size", "seq_len", "in_features", "out_features"],
+        "breakdown": {
+          "matrix_multiply": "2 * B * S * in_features * out_features",
+          "bias_add": "B * S * out_features (if bias=True)"
+        }
+      },
+      "validation": {
+        "status": "validated"
+      }
+    },
+    
+    {
+      "module_class": "LlamaAttention",
+      "flop_function": {
+        "formula": "8 * B * S * hidden_size^2 + 16608 * B * S^2",
+        "parameters": ["batch_size", "seq_len", "hidden_size", "num_heads", "head_dim"],
+        "breakdown": {
+          "q_proj": "2 * B * S * hidden_size^2",
+          "k_proj": "2 * B * S * hidden_size^2", 
+          "v_proj": "2 * B * S * hidden_size^2",
+          "attention_scores": "2 * B * num_heads * S^2 * head_dim",
+          "attention_output": "2 * B * num_heads * S^2 * head_dim", 
+          "o_proj": "2 * B * S * hidden_size^2"
+        }
+      },
+      "validation": {
+        "status": "validated"
+      }
+    }
+  ]
+}
