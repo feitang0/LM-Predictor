@@ -14,22 +14,31 @@ from typing import Dict, Any, Optional
 class ModuleAnalyzerAgent:
     """Claude Code agent for analyzing PyTorch module forward functions."""
 
-    def __init__(self, claude_command: str = "claude"):
+    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema.json"):
         """Initialize the agent with Claude Code command."""
         self.claude_command = claude_command
+        self.schema_path = schema_path
 
-    def analyze_module_with_agent(self, module_class: str, module_path: str) -> Dict[str, Any]:
+    def _load_schema(self) -> Dict[str, Any]:
+        """Load the module database schema."""
+        if not os.path.exists(self.schema_path):
+            raise FileNotFoundError(f"Schema file not found: {self.schema_path}")
+
+        with open(self.schema_path, 'r') as f:
+            return json.load(f)
+
+    def analyze_module_with_agent(self, module_spec: str) -> Dict[str, Any]:
         """
         Use Claude Code to analyze a module's forward function for FLOPs and memory.
 
         Args:
-            module_class: PyTorch module class name (e.g., 'LlamaAttention')
-            module_path: Python import path (e.g., 'transformers.models.llama.modeling_llama')
+            module_spec: Module specification - can be class name or full path
+                        (e.g., 'Linear', 'torch.nn.Linear', 'LlamaAttention')
 
         Returns:
             Dictionary with analysis results including thinking process, formulas, and functions
         """
-        prompt = self._create_analysis_prompt(module_class, module_path)
+        prompt = self._create_analysis_prompt(module_spec)
 
         try:
             # Run Claude Code in headless mode
@@ -55,18 +64,52 @@ class ModuleAnalyzerAgent:
             return analysis
 
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Claude Code analysis timed out for {module_class}")
+            raise RuntimeError(f"Claude Code analysis timed out for {module_spec}")
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Failed to parse Claude response: {e}")
         except Exception as e:
-            raise RuntimeError(f"Analysis failed for {module_class}: {e}")
+            raise RuntimeError(f"Analysis failed for {module_spec}: {e}")
 
-    def _create_analysis_prompt(self, module_class: str, module_path: str) -> str:
+    def _create_analysis_prompt(self, module_spec: str) -> str:
         """Create the prompt for Claude Code to analyze a module."""
-        return f"""
-I need to analyze the FLOPs and memory access patterns of the PyTorch module {module_class}.
+        # Load schema to get the structure
+        schema = self._load_schema()
+        example = schema["example_entries"][1]  # Use the LlamaAttention example as template
 
-The module is from: {module_path}
+        # Generate example JSON structure from schema
+        example_json = json.dumps({
+            "full_class_name": "module.path.ClassName",
+            "code_location": example["code_location"],
+            "flop_analysis": {
+                "thinking_process": "Step-by-step explanation of how you calculated FLOPs for each operation",
+                "parameters": example["flop_analysis"]["parameters"],
+                "formula_template": "Template using ${param} and {Module}() syntax like: 2 * ${B} * ${S} * ${input_features} * ${output_features}",
+                "module_depends": ["torch__nn__Linear"],
+                "breakdown": {
+                    "operation_name1": "${B} * ${S} * ${param}",
+                    "operation_name2": "{torch__nn__Linear}(${B} * ${S}, ${input_dim}, ${output_dim})"
+                }
+            },
+            "memory_analysis": {
+                "thinking_process": "Explanation of memory access patterns",
+                "parameters": example["memory_analysis"]["parameters"],
+                "reads_template": "${param1} * ${param2} * ${dtype_bytes}",
+                "writes_template": "${param1} * ${param2} * ${dtype_bytes}",
+                "intermediates_template": "${param1} * ${param2} * ${dtype_bytes}",
+                "module_depends": []
+            },
+            "validation": {
+                "status": "pending",
+                "validator": None,
+                "date": None,
+                "notes": f"Agent-generated analysis for {module_spec}"
+            }
+        }, indent=2)
+
+        return f"""
+I need to analyze the FLOPs and memory access patterns of the PyTorch module: {module_spec}
+
+This could be a class name (e.g., 'Linear') or a full module path (e.g., 'torch.nn.Linear'). Please find the module in the codebase.
 
 You have access to:
 - transformers/ - Transformers library source code
@@ -92,54 +135,24 @@ Please perform the following analysis:
    - Activation reads/writes
    - Intermediate tensor storage
 
-6. **Generate Functions**: Create Python functions to calculate FLOPs and memory
+6. **Generate Templates**: Create formula templates using the template syntax
+
+**IMPORTANT**: Use template syntax in your formulas:
+- Parameters: Use ${{param}} syntax (e.g., ${{B}}, ${{S}}, ${{hidden_size}})
+- Module calls: Use {{Module}}() syntax (e.g., {{torch__nn__Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}}))
+- Module names use double underscores: torch.nn.Linear becomes torch__nn__Linear
 
 **Return your analysis as a JSON object with this exact structure:**
 
 ```json
-{{
-  "module_class": "{module_class}",
-  "module_path": "{module_path}",
-  "code_location": {{
-    "file": "path/to/file.py",
-    "line_start": 123,
-    "line_end": 200
-  }},
-  "forward_method": {{
-    "line_start": 145,
-    "line_end": 180,
-    "code_snippet": "def forward(self, ...):\\n    ..."
-  }},
-  "flop_analysis": {{
-    "thinking_process": "Step-by-step explanation of how you calculated FLOPs for each operation",
-    "parameters": ["batch_size", "seq_len", "hidden_size", "num_heads", "head_dim"],
-    "formula": "Mathematical formula like: 8 * B * S * hidden_size^2 + 4 * B * num_heads * S^2 * head_dim",
-    "function_code": "def count_{module_class.lower()}_flops(B, S, hidden_size, num_heads, head_dim):\\n    # Implementation\\n    return total_flops",
-    "breakdown": {{
-      "operation_name1": "2 * B * S * hidden_size^2",
-      "operation_name2": "4 * B * num_heads * S^2 * head_dim"
-    }}
-  }},
-  "memory_analysis": {{
-    "thinking_process": "Explanation of memory access patterns",
-    "parameters": ["batch_size", "seq_len", "hidden_size", "dtype_bytes"],
-    "reads_formula": "Formula for total bytes read",
-    "writes_formula": "Formula for total bytes written",
-    "intermediates": "Formula for peak intermediate memory"
-  }},
-  "validation": {{
-    "status": "pending",
-    "validator": null,
-    "date": null,
-    "notes": "Agent-generated analysis for {module_class}"
-  }},
-  "dependencies": ["List", "of", "dependency", "modules"]
-}}
+{example_json}
 ```
 
 Be extremely careful with your FLOP calculations. For matrix multiplication of shapes [A, B] x [B, C], the FLOPs are 2*A*B*C (multiply-accumulate). For attention mechanisms, calculate QK^T, softmax, and attention*V separately.
 
-Make sure your formulas use standard variable names: B (batch_size), S (seq_len), and actual parameter names from the module.
+Make sure your templates use standard variable names: B (batch_size), S (seq_len), and actual parameter names from the module.
+
+The parameters array should include objects with "name", "type", and "description" fields for each parameter used in the templates.
 """
 
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
@@ -177,46 +190,47 @@ Make sure your formulas use standard variable names: B (batch_size), S (seq_len)
         """Fallback parser for when JSON extraction fails."""
         # This is a simple fallback - in practice, you'd want more robust parsing
         return {
-            "module_class": "Unknown",
-            "module_path": "unknown",
+            "full_class_name": "unknown",
             "code_location": {
                 "file": "unknown",
                 "line_start": 0,
                 "line_end": 0
             },
-            "forward_method": {
-                "line_start": 0,
-                "line_end": 0,
-                "code_snippet": "# Parse failed"
-            },
             "flop_analysis": {
                 "thinking_process": f"Failed to parse response: {response_text[:200]}...",
-                "parameters": ["batch_size", "seq_len"],
-                "formula": "0",
-                "function_code": "def count_flops(): return 0",
+                "parameters": [
+                    {"name": "B", "type": "int", "description": "batch size"},
+                    {"name": "S", "type": "int", "description": "sequence length"}
+                ],
+                "formula_template": "0",
+                "module_depends": [],
                 "breakdown": {"unknown": "0"}
             },
             "memory_analysis": {
                 "thinking_process": "Parse failed",
-                "parameters": ["batch_size", "seq_len"],
-                "reads_formula": "0",
-                "writes_formula": "0",
-                "intermediates": "0"
+                "parameters": [
+                    {"name": "B", "type": "int", "description": "batch size"},
+                    {"name": "S", "type": "int", "description": "sequence length"},
+                    {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
+                ],
+                "reads_template": "0",
+                "writes_template": "0",
+                "intermediates_template": "0",
+                "module_depends": []
             },
             "validation": {
                 "status": "failed",
                 "validator": None,
                 "date": None,
                 "notes": "Agent response parsing failed"
-            },
-            "dependencies": []
+            }
         }
 
     def _validate_analysis(self, analysis: Dict[str, Any]) -> None:
         """Validate the structure of the analysis result."""
         required_keys = [
-            "module_class", "module_path", "code_location", "forward_method",
-            "flop_analysis", "memory_analysis", "validation", "dependencies"
+            "full_class_name", "code_location",
+            "flop_analysis", "memory_analysis", "validation"
         ]
 
         for key in required_keys:
@@ -224,35 +238,50 @@ Make sure your formulas use standard variable names: B (batch_size), S (seq_len)
                 raise ValueError(f"Missing required key: {key}")
 
         # Validate flop_analysis structure
-        flop_keys = ["thinking_process", "parameters", "formula", "function_code", "breakdown"]
+        flop_keys = ["thinking_process", "parameters", "formula_template", "module_depends", "breakdown"]
         for key in flop_keys:
             if key not in analysis["flop_analysis"]:
                 raise ValueError(f"Missing flop_analysis key: {key}")
 
         # Validate memory_analysis structure
-        memory_keys = ["thinking_process", "parameters", "reads_formula", "writes_formula", "intermediates"]
+        memory_keys = ["thinking_process", "parameters", "reads_template", "writes_template", "intermediates_template", "module_depends"]
         for key in memory_keys:
             if key not in analysis["memory_analysis"]:
                 raise ValueError(f"Missing memory_analysis key: {key}")
+
+        # Validate parameters structure
+        for section in ["flop_analysis", "memory_analysis"]:
+            params = analysis[section]["parameters"]
+            if not isinstance(params, list):
+                raise ValueError(f"{section}.parameters must be a list")
+
+            for param in params:
+                if not isinstance(param, dict):
+                    raise ValueError(f"{section}.parameters items must be objects")
+
+                param_keys = ["name", "type", "description"]
+                for key in param_keys:
+                    if key not in param:
+                        raise ValueError(f"Missing parameter key {key} in {section}.parameters")
 
 
 def main():
     """Command-line interface for the module analyzer agent."""
     parser = argparse.ArgumentParser(description='Analyze PyTorch module with Claude Code agent')
-    parser.add_argument('--module_class', type=str, required=True,
-                       help='PyTorch module class name (e.g., LlamaAttention)')
-    parser.add_argument('--module_path', type=str, required=True,
-                       help='Python import path (e.g., transformers.models.llama.modeling_llama)')
+    parser.add_argument('module', type=str,
+                       help='Module specification: class name or full path (e.g., Linear, torch.nn.Linear)')
     parser.add_argument('--output', type=str, default=None,
                        help='Output file path (default: print to stdout)')
     parser.add_argument('--claude_command', type=str, default='claude',
                        help='Claude Code command (default: claude)')
+    parser.add_argument('--schema_path', type=str, default='module_db_schema.json',
+                       help='Path to module database schema file (default: module_db_schema.json)')
 
     args = parser.parse_args()
 
     try:
-        agent = ModuleAnalyzerAgent(claude_command=args.claude_command)
-        analysis = agent.analyze_module_with_agent(args.module_class, args.module_path)
+        agent = ModuleAnalyzerAgent(claude_command=args.claude_command, schema_path=args.schema_path)
+        analysis = agent.analyze_module_with_agent(args.module)
 
         if args.output:
             with open(args.output, 'w') as f:

@@ -50,3 +50,4 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 - Formula parameters use `${param}` syntax, module calls use `{Module}()` syntax (same for FLOP and memory templates)
 - All separators (dots and underscores) become double underscores: `torch.nn.Linear` → `torch__nn__Linear`
 - Always think harder first, do not rush to write code
+- Use argparse to process all input arguments
