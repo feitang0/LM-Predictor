@@ -31,8 +31,8 @@ class ModuleAnalyzer:
             json.dump(db, f, indent=2)
 
     def _module_to_key(self, module_path: str) -> str:
-        """Convert module path to database key."""
-        return module_path.replace(".", "__")
+        """Use module path directly as database key."""
+        return module_path
 
     def is_cached(self, module_path: str) -> bool:
         """Check if module is in cache."""
