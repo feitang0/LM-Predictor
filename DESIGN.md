@@ -30,11 +30,11 @@ A JSON database storing computational characteristics for each PyTorch module ty
 ```json
 {
   "transformers__models__llama__modeling__llama__LlamaAttention": {
-    "module_path": "transformers.models.llama.modeling_llama.LlamaAttention",
+    "full_class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
     "code_location": {
       "file": "transformers/src/transformers/models/llama/modeling_llama.py",
-      "line_start": 197,
-      "line_end": 250
+      "line_start": 224,
+      "line_end": 265
     },
     "flop_analysis": {
       "thinking_process": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs...",
@@ -76,11 +76,11 @@ A JSON database storing computational characteristics for each PyTorch module ty
   },
 
   "torch__nn__Linear": {
-    "module_path": "torch.nn.Linear",
+    "full_class_name": "torch.nn.Linear",
     "code_location": {
-      "file": "torch/nn/modules/linear.py",
-      "line_start": 103,
-      "line_end": 120
+      "file": "pytorch/torch/nn/modules/linear.py",
+      "line_start": 124,
+      "line_end": 125
     },
     "flop_analysis": {
       "thinking_process": "Standard matrix multiplication: input @ weight.T",
