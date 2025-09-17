@@ -1,5 +1,92 @@
 {
   "version": "1.0",
   "description": "Module FLOP and memory analysis database with Claude Code agent integration",
-  "modules": {}
+  "modules": {
+    "LlamaMLP": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaMLP",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 143,
+        "line_end": 156
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step reasoning: 1) gate_proj: Linear [B,S,H] x [H,I] = 2*B*S*H*I FLOPs, 2) up_proj: Linear [B,S,H] x [H,I] = 2*B*S*H*I FLOPs, 3) act_fn: activation function ~B*S*I FLOPs, 4) elementwise multiply: B*S*I FLOPs, 5) down_proj: Linear [B,S,I] x [I,H] = 2*B*S*I*H FLOPs. Total: 6*B*S*H*I + 2*B*S*I FLOPs",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension (typically 4 * hidden_size)"
+          }
+        ],
+        "formula_template": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size}) + {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size}) + ${B} * ${S} * ${intermediate_size} + ${B} * ${S} * ${intermediate_size} + {torch.nn.Linear}(${B} * ${S}, ${intermediate_size}, ${hidden_size})",
+        "module_depends": [
+          "torch.nn.Linear"
+        ],
+        "breakdown": {
+          "gate_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size})",
+          "up_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size})",
+          "activation": "${B} * ${S} * ${intermediate_size}",
+          "elementwise_multiply": "${B} * ${S} * ${intermediate_size}",
+          "down_proj": "{torch.nn.Linear}(${B} * ${S}, ${intermediate_size}, ${hidden_size})"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: Weight matrices read once each - gate_proj weights (H*I), up_proj weights (H*I), down_proj weights (I*H). Input activations [B,S,H] read twice for gate_proj and up_proj. Intermediate tensors stored: gate output [B,S,I], up output [B,S,I], activated gate [B,S,I], elementwise product [B,S,I]. Final output [B,S,H] written once.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_template": "2 * ${hidden_size} * ${intermediate_size} * ${dtype_bytes} + ${intermediate_size} * ${hidden_size} * ${dtype_bytes} + 2 * ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "intermediates_template": "4 * ${B} * ${S} * ${intermediate_size} * ${dtype_bytes}",
+        "module_depends": [
+          "torch.nn.Linear"
+        ]
+      },
+      "validation": {
+        "status": "pending",
+        "validator": null,
+        "date": null,
+        "notes": "Agent-generated, awaiting human validation"
+      }
+    }
+  }
 }

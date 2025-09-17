@@ -5,19 +5,23 @@ This module uses Claude Code in headless mode to understand forward function imp
 """
 
 import json
+import os
 import subprocess
 import sys
 import argparse
 from typing import Dict, Any, Optional
+from dotenv import dotenv_values
+from jsonschema import validate, ValidationError
 
 
 class ModuleAnalyzerAgent:
     """Claude Code agent for analyzing PyTorch module forward functions."""
 
-    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema.json"):
+    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema_v2.json", examples_path: str = "module_db_examples.json"):
         """Initialize the agent with Claude Code command."""
         self.claude_command = claude_command
         self.schema_path = schema_path
+        self.examples_path = examples_path
 
     def _load_schema(self) -> Dict[str, Any]:
         """Load the module database schema."""
@@ -25,6 +29,14 @@ class ModuleAnalyzerAgent:
             raise FileNotFoundError(f"Schema file not found: {self.schema_path}")
 
         with open(self.schema_path, 'r') as f:
+            return json.load(f)
+
+    def _load_examples(self) -> list[Dict[str, Any]]:
+        """Load the module database examples."""
+        if not os.path.exists(self.examples_path):
+            raise FileNotFoundError(f"Examples file not found: {self.examples_path}")
+
+        with open(self.examples_path, 'r') as f:
             return json.load(f)
 
     def analyze_module_with_agent(self, module_spec: str) -> Dict[str, Any]:
@@ -40,16 +52,30 @@ class ModuleAnalyzerAgent:
         """
         prompt = self._create_analysis_prompt(module_spec)
 
+        print("=== PROMPT ===")
+        print(prompt)
+        print("=== END PROMPT ===")
+
         try:
+            # Prepare environment (current env + any from .env file)
+            env = os.environ.copy()
+
+            # Load .env variables only for this subprocess (doesn't affect system env)
+            env_vars = dotenv_values(".env")
+            env.update(env_vars)
+
             # Run Claude Code in headless mode
             result = subprocess.run([
                 self.claude_command, "-p", prompt,
-                "--output-format", "json",
-                "--allowedTools", "Read,Grep,Glob"
-            ], capture_output=True, text=True, timeout=300)
+                "--output-format", "json"
+            ], capture_output=True, text=True, timeout=300, env=env)
 
             if result.returncode != 0:
                 raise RuntimeError(f"Claude Code failed: {result.stderr}")
+
+            print("=== CLAUDE RESPONSE ===")
+            print(result.stdout)
+            print("=== END CLAUDE RESPONSE ===")
 
             # Parse Claude's response
             claude_response = json.loads(result.stdout)
@@ -66,48 +92,21 @@ class ModuleAnalyzerAgent:
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Claude Code analysis timed out for {module_spec}")
         except json.JSONDecodeError as e:
+            print(f"Claude stdout: {result.stdout}")
+            print(f"Claude stderr: {result.stderr}")
             raise RuntimeError(f"Failed to parse Claude response: {e}")
         except Exception as e:
             raise RuntimeError(f"Analysis failed for {module_spec}: {e}")
 
     def _create_analysis_prompt(self, module_spec: str) -> str:
         """Create the prompt for Claude Code to analyze a module."""
-        # Load schema to get the structure
-        schema = self._load_schema()
-        example = schema["example_entries"][1]  # Use the LlamaAttention example as template
-
-        # Generate example JSON structure from schema
-        example_json = json.dumps({
-            "full_class_name": "module.path.ClassName",
-            "code_location": example["code_location"],
-            "flop_analysis": {
-                "thinking_process": "Step-by-step explanation of how you calculated FLOPs for each operation",
-                "parameters": example["flop_analysis"]["parameters"],
-                "formula_template": "Template using ${param} and {Module}() syntax like: 2 * ${B} * ${S} * ${input_features} * ${output_features}",
-                "module_depends": ["torch__nn__Linear"],
-                "breakdown": {
-                    "operation_name1": "${B} * ${S} * ${param}",
-                    "operation_name2": "{torch__nn__Linear}(${B} * ${S}, ${input_dim}, ${output_dim})"
-                }
-            },
-            "memory_analysis": {
-                "thinking_process": "Explanation of memory access patterns",
-                "parameters": example["memory_analysis"]["parameters"],
-                "reads_template": "${param1} * ${param2} * ${dtype_bytes}",
-                "writes_template": "${param1} * ${param2} * ${dtype_bytes}",
-                "intermediates_template": "${param1} * ${param2} * ${dtype_bytes}",
-                "module_depends": []
-            },
-            "validation": {
-                "status": "pending",
-                "validator": None,
-                "date": None,
-                "notes": f"Agent-generated analysis for {module_spec}"
-            }
-        }, indent=2)
+        # Load examples to get template structure
+        examples = self._load_examples()
+        example = examples[1]  # Use the LlamaAttention example as template
+        example_json = json.dumps(example, indent=2)
 
         return f"""
-I need to analyze the FLOPs and memory access patterns of the PyTorch module: {module_spec}
+ultrathink: I need to analyze the FLOPs and memory access patterns of the PyTorch module: {module_spec}
 
 This could be a class name (e.g., 'Linear') or a full module path (e.g., 'torch.nn.Linear'). Please find the module in the codebase.
 
@@ -115,15 +114,11 @@ You have access to:
 - transformers/ - Transformers library source code
 - pytorch/ - PyTorch source code (if needed)
 
-Please perform the following analysis:
+TODO List:
 
-1. **Find the Module**: Locate {module_class} in the codebase using search tools
+1. **Find the Module**: Locate {module_spec} in the codebase using search tools
 2. **Read Forward Method**: Extract and read the complete forward() method implementation
-3. **Analyze Operations**: Step by step, identify all computational operations:
-   - Matrix multiplications (Linear layers, einsum, etc.)
-   - Element-wise operations (activations, normalization, etc.)
-   - Attention computations (if applicable)
-   - Any other FLOP-intensive operations
+3. **Analyze Operations**: Step by step, identify all computational operations
 
 4. **Calculate FLOPs**: For each operation, determine:
    - Input/output tensor shapes
@@ -137,22 +132,15 @@ Please perform the following analysis:
 
 6. **Generate Templates**: Create formula templates using the template syntax
 
-**IMPORTANT**: Use template syntax in your formulas:
+**Template Syntax Requirements**:
 - Parameters: Use ${{param}} syntax (e.g., ${{B}}, ${{S}}, ${{hidden_size}})
-- Module calls: Use {{Module}}() syntax (e.g., {{torch__nn__Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}}))
-- Module names use double underscores: torch.nn.Linear becomes torch__nn__Linear
+- Module calls: Use {{Module}}() syntax (e.g., {{torch.nn.Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}}))
 
-**Return your analysis as a JSON object with this exact structure:**
+**Your response must be ONLY the JSON object below with your actual analysis data:**
 
 ```json
 {example_json}
 ```
-
-Be extremely careful with your FLOP calculations. For matrix multiplication of shapes [A, B] x [B, C], the FLOPs are 2*A*B*C (multiply-accumulate). For attention mechanisms, calculate QK^T, softmax, and attention*V separately.
-
-Make sure your templates use standard variable names: B (batch_size), S (seq_len), and actual parameter names from the module.
-
-The parameters array should include objects with "name", "type", and "description" fields for each parameter used in the templates.
 """
 
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
@@ -227,42 +215,16 @@ The parameters array should include objects with "name", "type", and "descriptio
         }
 
     def _validate_analysis(self, analysis: Dict[str, Any]) -> None:
-        """Validate the structure of the analysis result."""
-        required_keys = [
-            "full_class_name", "code_location",
-            "flop_analysis", "memory_analysis", "validation"
-        ]
-
-        for key in required_keys:
-            if key not in analysis:
-                raise ValueError(f"Missing required key: {key}")
-
-        # Validate flop_analysis structure
-        flop_keys = ["thinking_process", "parameters", "formula_template", "module_depends", "breakdown"]
-        for key in flop_keys:
-            if key not in analysis["flop_analysis"]:
-                raise ValueError(f"Missing flop_analysis key: {key}")
-
-        # Validate memory_analysis structure
-        memory_keys = ["thinking_process", "parameters", "reads_template", "writes_template", "intermediates_template", "module_depends"]
-        for key in memory_keys:
-            if key not in analysis["memory_analysis"]:
-                raise ValueError(f"Missing memory_analysis key: {key}")
-
-        # Validate parameters structure
-        for section in ["flop_analysis", "memory_analysis"]:
-            params = analysis[section]["parameters"]
-            if not isinstance(params, list):
-                raise ValueError(f"{section}.parameters must be a list")
-
-            for param in params:
-                if not isinstance(param, dict):
-                    raise ValueError(f"{section}.parameters items must be objects")
-
-                param_keys = ["name", "type", "description"]
-                for key in param_keys:
-                    if key not in param:
-                        raise ValueError(f"Missing parameter key {key} in {section}.parameters")
+        """Validate the structure of the analysis result using JSON Schema."""
+        try:
+            schema = self._load_schema()
+            validate(instance=analysis, schema=schema)
+        except ValidationError as e:
+            # Provide more helpful error messages
+            error_path = " -> ".join(str(p) for p in e.absolute_path) if e.absolute_path else "root"
+            raise ValueError(f"Schema validation failed at {error_path}: {e.message}")
+        except Exception as e:
+            raise ValueError(f"Validation failed: {e}")
 
 
 def main():
@@ -274,13 +236,15 @@ def main():
                        help='Output file path (default: print to stdout)')
     parser.add_argument('--claude_command', type=str, default='claude',
                        help='Claude Code command (default: claude)')
-    parser.add_argument('--schema_path', type=str, default='module_db_schema.json',
-                       help='Path to module database schema file (default: module_db_schema.json)')
+    parser.add_argument('--schema_path', type=str, default='module_db_schema_v2.json',
+                       help='Path to module database schema file (default: module_db_schema_v2.json)')
+    parser.add_argument('--examples_path', type=str, default='module_db_examples.json',
+                       help='Path to module database examples file (default: module_db_examples.json)')
 
     args = parser.parse_args()
 
     try:
-        agent = ModuleAnalyzerAgent(claude_command=args.claude_command, schema_path=args.schema_path)
+        agent = ModuleAnalyzerAgent(claude_command=args.claude_command, schema_path=args.schema_path, examples_path=args.examples_path)
         analysis = agent.analyze_module_with_agent(args.module)
 
         if args.output:
