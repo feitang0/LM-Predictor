@@ -66,7 +66,7 @@
       "formula_template": {
         "type": "string",
         "description": "Formula template using ${param} and {Module}() syntax",
-        "example": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})"
+        "example": "3 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})"
       },
       "module_depends": {
         "type": "array",
@@ -74,14 +74,14 @@
         "items": {
           "type": "string"
         },
-        "example": ["torch__nn__Linear"]
+        "example": ["torch.nn.Linear"]
       },
       "breakdown": {
         "type": "object",
         "description": "FLOP breakdown by operation/submodule using template syntax",
         "example": {
-          "q_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "k_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+          "q_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+          "k_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
           "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})"
         }
       }
@@ -142,7 +142,7 @@
         "items": {
           "type": "string"
         },
-        "example": ["torch__nn__Linear"]
+        "example": ["torch.nn.Linear"]
       }
     },
     
@@ -153,20 +153,19 @@
         "description": "Validation status of the analysis function"
       },
       "validator": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Name/ID of person who validated the function"
       },
       "date": {
-        "type": "string",
+        "type": ["string", "null"],
         "format": "YYYY-MM-DD",
         "description": "Date of validation"
       },
       "notes": {
-        "type": "string",
+        "type": ["string", "null"],
         "description": "Additional validation notes or caveats"
       }
-    },
-    
+    }
   },
 
   "example_entries": [
@@ -228,14 +227,14 @@
           {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
           {"name": "num_heads", "type": "int", "description": "number of attention heads"}
         ],
-        "formula_template": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "module_depends": ["torch__nn__Linear"],
+        "formula_template": "3 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+        "module_depends": ["torch.nn.Linear"],
         "breakdown": {
-          "q_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "k_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "v_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+          "q_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+          "k_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+          "v_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
           "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})",
-          "o_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})"
+          "o_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})"
         }
       },
       "memory_analysis": {
@@ -244,12 +243,13 @@
           {"name": "B", "type": "int", "description": "batch size"},
           {"name": "S", "type": "int", "description": "sequence length"},
           {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
+          {"name": "num_heads", "type": "int", "description": "number of attention heads"},
           {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
         ],
         "reads_template": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
         "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
         "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
-        "module_depends": ["torch__nn__Linear"]
+        "module_depends": ["torch.nn.Linear"]
       },
       "validation": {
         "status": "pending",

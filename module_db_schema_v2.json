@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PyTorch Module Analysis Schema",
+  "description": "JSON Schema for storing PyTorch module FLOP and memory analysis functions",
+  "type": "object",
+  "properties": {
+    "full_class_name": {
+      "type": "string",
+      "description": "Complete Python class name with full module path"
+    },
+    "code_location": {
+      "type": "object",
+      "description": "Source code location information",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to source file containing the class"
+        },
+        "line_start": {
+          "type": "integer",
+          "description": "Starting line number of forward method",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "description": "Ending line number of forward method",
+          "minimum": 1
+        }
+      },
+      "required": ["file", "line_start", "line_end"],
+      "additionalProperties": false
+    },
+    "flop_analysis": {
+      "type": "object",
+      "description": "FLOP calculation analysis",
+      "properties": {
+        "thinking_process": {
+          "type": "string",
+          "description": "Step-by-step reasoning for FLOP calculation"
+        },
+        "parameters": {
+          "type": "array",
+          "description": "List of parameter objects needed for FLOP calculation",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Parameter name used in formula template"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["int", "float", "str", "bool"],
+                "description": "Parameter data type"
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable parameter description"
+              }
+            },
+            "required": ["name", "type", "description"],
+            "additionalProperties": false
+          }
+        },
+        "formula_template": {
+          "type": "string",
+          "description": "Formula template using ${param} and {Module}() syntax"
+        },
+        "module_depends": {
+          "type": "array",
+          "description": "List of module dependencies referenced in formula template",
+          "items": {
+            "type": "string"
+          }
+        },
+        "breakdown": {
+          "type": "object",
+          "description": "FLOP breakdown by operation/submodule using template syntax",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["thinking_process", "parameters", "formula_template", "module_depends", "breakdown"],
+      "additionalProperties": false
+    },
+    "memory_analysis": {
+      "type": "object",
+      "description": "Memory access pattern analysis",
+      "properties": {
+        "thinking_process": {
+          "type": "string",
+          "description": "Step-by-step reasoning for memory access patterns"
+        },
+        "parameters": {
+          "type": "array",
+          "description": "List of parameter objects needed for memory calculation",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Parameter name used in formula template"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["int", "float", "str", "bool"],
+                "description": "Parameter data type"
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable parameter description"
+              }
+            },
+            "required": ["name", "type", "description"],
+            "additionalProperties": false
+          }
+        },
+        "reads_template": {
+          "type": "string",
+          "description": "Formula template for memory reads using ${param} and {Module}() syntax"
+        },
+        "writes_template": {
+          "type": "string",
+          "description": "Formula template for memory writes using ${param} and {Module}() syntax"
+        },
+        "intermediates_template": {
+          "type": "string",
+          "description": "Formula template for intermediate memory using ${param} and {Module}() syntax"
+        },
+        "module_depends": {
+          "type": "array",
+          "description": "List of module dependencies referenced in memory templates",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["thinking_process", "parameters", "reads_template", "writes_template", "intermediates_template", "module_depends"],
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "description": "Validation status and metadata",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "validated", "deprecated", "failed"],
+          "description": "Validation status of the analysis function"
+        },
+        "validator": {
+          "type": ["string", "null"],
+          "description": "Name/ID of person who validated the function"
+        },
+        "date": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Date of validation in YYYY-MM-DD format"
+        },
+        "notes": {
+          "type": ["string", "null"],
+          "description": "Additional validation notes or caveats"
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["full_class_name", "code_location", "flop_analysis", "memory_analysis", "validation"],
+  "additionalProperties": false
+}
