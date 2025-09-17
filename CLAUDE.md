@@ -6,16 +6,16 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 - Use `uv` for all dependency management (NOT pip/conda)
 - Python 3.11+ required
+- `cp .env.example .env` - Copy environment template and add your Hugging Face token
 - `uv sync` - Install all dependencies
 - `uv add <package>` - Add new dependency
 - `uv run <command>` - Run commands in managed environment
 
 ## Common Commands
 
-- `uv run python model_analyzer.py --model_id <model>` - Extract model architecture
-- `uv run python model_analyzer.py --model_id <model> --analyze --batch_size <B> --seq_len <S>` - Full FLOP/memory analysis
-- `uv run python module_analyzer.py --module <ModuleName>` - Analyze unknown module (cache-first, agent fallback)
-- `uv run python -m pytest` - Run tests (when implemented)
+- `uv run python module_analyzer.py <ModuleName>` - Analyze module (cache-first, agent fallback)
+- `uv run python module_analyzer_agent.py <ModuleName>` - Direct agent analysis of unknown module
+- `uv run python model_analyzer.py --model_id <model> --analyze --batch_size <B> --seq_len <S>` - Legacy FLOP analysis
 
 ## Code Style
 
@@ -27,21 +27,23 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 
 ## Key Files
 
-- `model_analyzer.py` - Main entry point for model FLOP/memory analysis
 - `module_analyzer.py` - Cache-first module analysis with Claude Code agent fallback
+- `module_analyzer_agent.py` - Claude Code agent for analyzing PyTorch module forward functions
 - `module_db.json` - Formula template cache (starts empty, populated by agent)
-- `generated_modules/` - Auto-generated Python modules from templates
+- `module_db_schema_v2.json` - Standard JSON schema for module database structure
+- `module_db_examples.json` - Example module analyses for agent templates
+- `module_db_schema.json` - Legacy schema (deprecated, use v2)
+- `model_analyzer.py` - Legacy model FLOP/memory analysis (hardware-specific)
 - `DESIGN.md` - System architecture and design decisions
-- `PROGRESS.md` - Implementation status and current milestones
-- `SCRATCHPAD.md` - Active issues, debugging notes, and temporary work
+- `.env.example` - Environment variable template (copy to .env and fill in tokens)
 
 ## Architecture Overview
 
-1. **Formula Templates**: JSON templates with `${param}` and `{Module}()` syntax (unified for FLOP/memory)
-2. **Nested Evaluation**: Recursive resolution of module dependencies
-3. **Library Namespacing**: `torch__nn__Linear` format prevents naming conflicts
-4. **Agent Integration**: Claude Code analyzes unknown modules automatically
-5. **Generated Modules**: Type-safe Python classes auto-generated from templates
+1. **Cache-First Analysis**: Check `module_db.json` before using Claude Code agent
+2. **Formula Templates**: JSON templates with `${param}` and `{Module}()` syntax (unified for FLOP/memory)
+3. **Claude Code Agent**: Automatically analyzes unknown PyTorch modules using source code
+4. **Library Namespacing**: `torch__nn__Linear` format prevents naming conflicts
+5. **Typed Parameters**: Parameters include name, type, and description for validation
 
 ## Important Notes
 
@@ -51,3 +53,4 @@ FLOP and memory analysis system for PyTorch models using nested formula template
 - All separators (dots and underscores) become double underscores: `torch.nn.Linear` → `torch__nn__Linear`
 - Always think harder first, do not rush to write code
 - Use argparse to process all input arguments
+- Always to ultrathink
