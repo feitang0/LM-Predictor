@@ -38,7 +38,12 @@ A JSON database storing computational characteristics for each PyTorch module ty
     },
     "flop_analysis": {
       "thinking_process": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs...",
-      "parameters": ["B", "S", "hidden_size", "num_heads"],
+      "parameters": [
+        {"name": "B", "type": "int", "description": "batch size"},
+        {"name": "S", "type": "int", "description": "sequence length"},
+        {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
+        {"name": "num_heads", "type": "int", "description": "number of attention heads"}
+      ],
       "formula_template": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
       "module_depends": ["torch__nn__Linear"],
       "breakdown": {
@@ -51,7 +56,12 @@ A JSON database storing computational characteristics for each PyTorch module ty
     },
     "memory_analysis": {
       "thinking_process": "Memory access pattern: Weight matrices are read once, input activations read once...",
-      "parameters": ["B", "S", "hidden_size", "dtype_bytes"],
+      "parameters": [
+        {"name": "B", "type": "int", "description": "batch size"},
+        {"name": "S", "type": "int", "description": "sequence length"},
+        {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
+        {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
+      ],
       "reads_template": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
       "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
       "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
@@ -74,7 +84,12 @@ A JSON database storing computational characteristics for each PyTorch module ty
     },
     "flop_analysis": {
       "thinking_process": "Standard matrix multiplication: input @ weight.T",
-      "parameters": ["B", "S", "input_features", "output_features"],
+      "parameters": [
+        {"name": "B", "type": "int", "description": "batch size"},
+        {"name": "S", "type": "int", "description": "sequence length"},
+        {"name": "input_features", "type": "int", "description": "input feature dimension"},
+        {"name": "output_features", "type": "int", "description": "output feature dimension"}
+      ],
       "formula_template": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
       "module_depends": [],
       "breakdown": {
@@ -83,7 +98,13 @@ A JSON database storing computational characteristics for each PyTorch module ty
     },
     "memory_analysis": {
       "thinking_process": "Memory access pattern: Weight matrix read once, input activations read once",
-      "parameters": ["B", "S", "input_features", "output_features", "dtype_bytes"],
+      "parameters": [
+        {"name": "B", "type": "int", "description": "batch size"},
+        {"name": "S", "type": "int", "description": "sequence length"},
+        {"name": "input_features", "type": "int", "description": "input feature dimension"},
+        {"name": "output_features", "type": "int", "description": "output feature dimension"},
+        {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
+      ],
       "reads_template": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
       "writes_template": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
       "intermediates_template": "0",
@@ -142,10 +163,15 @@ A JSON database storing computational characteristics for each PyTorch module ty
 ```python
 # generated_modules/torch/nn_linear.py
 from ..base import BaseModule
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 class TorchLinear(BaseModule):
     """Auto-generated FLOP/memory calculator for torch.nn.Linear"""
+
+    def get_required_parameters(self) -> Dict[str, str]:
+        """Return parameter names mapped to their types"""
+        # e.g., {"B": "int", "S": "int", "input_features": "int", "output_features": "int"}
+        # Generated from JSON template parameters field
 
     def compute_flops(self, **params: Dict[str, Any]) -> int:
         """Calculate FLOPs using agent-analyzed formula"""
