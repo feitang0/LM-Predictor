@@ -57,6 +57,10 @@ class ModuleAnalyzerAgent:
         print("=== END PROMPT ===")
 
         try:
+            # Remove response.json if it exists
+            if os.path.exists("response.json"):
+                os.remove("response.json")
+
             # Prepare environment (current env + any from .env file)
             env = os.environ.copy()
 
@@ -67,8 +71,8 @@ class ModuleAnalyzerAgent:
             # Run Claude Code in headless mode
             result = subprocess.run([
                 self.claude_command, "-p", prompt,
-                "--output-format", "json"
-            ], capture_output=True, text=True, timeout=300, env=env)
+                "--dangerously-skip-permissions"
+            ], capture_output=True, text=True, timeout=600, env=env)
 
             if result.returncode != 0:
                 raise RuntimeError(f"Claude Code failed: {result.stderr}")
@@ -77,12 +81,12 @@ class ModuleAnalyzerAgent:
             print(result.stdout)
             print("=== END CLAUDE RESPONSE ===")
 
-            # Parse Claude's response
-            claude_response = json.loads(result.stdout)
-            response_text = claude_response.get("result", "")
+            # Read analysis from response.json
+            if not os.path.exists("response.json"):
+                raise FileNotFoundError("Claude did not create response.json file")
 
-            # Extract JSON from Claude's response
-            analysis = self._parse_claude_response(response_text)
+            with open("response.json", 'r') as f:
+                analysis = json.load(f)
 
             # Validate the analysis structure
             self._validate_analysis(analysis)
@@ -106,112 +110,62 @@ class ModuleAnalyzerAgent:
         example_json = json.dumps(example, indent=2)
 
         return f"""
-ultrathink: Build reusable analysis for LLM module: {module_spec}
+ultrathink: Analyze the module: {module_spec}
 
-GOAL: Create a modular FLOP and memory analysis that can be reused across different model configurations. This analysis will be stored in a database and composed with other modules.
+GOAL: Calculate the FLOPs and memory read/write volumes when calling forward() on this module
 
-CRITICAL PRINCIPLE: Maximize reusability through module dependencies rather than hardcoded calculations.
-
-## Available Resources:
+Available Resources:
 - transformers/ - Hugging Face transformers source code
 - pytorch/ - PyTorch source code
 - module_db_schema.json - Output schema specification
 
-## Analysis Steps:
+IMPORTANT:
+1. Your final step must be to write the complete JSON analysis to response.json
+2. Use {{}} to represent a module and ${{}} to represent a parameter
+
+TODO List:
 
 1. **Locate Module**: Find {module_spec} in the codebase and read its forward() method
 
-2. **Decompose Operations**: Break down the forward() method into:
-   - **Reusable modules** (any class with its own forward method) → Use {{ModuleName}}() syntax
-   - **Primitive operations** (activations, element-wise math, tensor ops) → Calculate FLOPs directly
+2. **Analyze FLOPs**: Break down the forward() operations into:
+   - **Module calls**: Such as {{torch.nn.Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}})
+   - **Direct calculations**: For all primitive operations (e.g., "4 * ${{B}} * ${{S}} * ${{hidden_size}}" for SiLU, "${{B}} * ${{S}} * ${{hidden_size}}" for element-wise ops, "7 * ${{B}} * ${{S}} * ${{hidden_size}}" for LayerNorm, etc.)
 
-3. **Build Modular Formulas**:
-   - **Modules**: {{torch.nn.Linear}}(${{batch_size}}, ${{input_dim}}, ${{output_dim}})
-   - **Primitives**: Direct FLOP counts (e.g., "4 * ${{B}} * ${{S}} * ${{hidden_size}}" for SiLU activation)
-   - **Parameters**: Use descriptive names (${{B}}, ${{S}}, ${{hidden_size}}, ${{intermediate_size}})
+3. **Analyze Memory**: Calculate data movement:
+   - **Reads**: Parameter weights + input activations
+   - **Writes**: Output activations
+   - **Intermediates**: Temporary tensors created during computation
+   - **Note**: Memory analysis focuses on data flow, not computation - may have empty module_depends
 
-4. **Memory Analysis**: Calculate reads/writes/intermediates using same modular approach
+4. **Write Result**: Create complete JSON matching the schema and write to response.json
 
 ## Example Reference:
-Here's a good example of the expected output format:
+Here's an example of the expected output format:
 
 {example_json}
 
-## Output Requirements:
-Return ONLY a JSON object matching module_db_schema.json schema. Use:
-- ${{parameter}} for variables
-- {{ModuleName}}(args) for module dependencies
-- Full class names (e.g., "transformers.models.llama.modeling_llama.LlamaMLP")
-- "human_validated": false in validation section
+Your final response must contain ONLY: SUCCESS or FAIL
 """
 
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
         """Extract JSON analysis from Claude's response text."""
-        # Look for JSON block in the response
-        lines = response_text.strip().split('\n')
-        json_start = -1
-        json_end = -1
+        import re
 
-        for i, line in enumerate(lines):
-            if line.strip().startswith('```json'):
-                json_start = i + 1
-            elif line.strip() == '```' and json_start != -1:
-                json_end = i
-                break
+        # First try: Look for JSON code block (```json ... ```)
+        json_block_pattern = r'```json\s*\n(.*?)\n```'
+        json_match = re.search(json_block_pattern, response_text, re.DOTALL)
 
-        if json_start == -1 or json_end == -1:
-            # Try to find JSON object directly
-            start_idx = response_text.find('{')
-            end_idx = response_text.rfind('}')
-            if start_idx != -1 and end_idx != -1:
-                json_text = response_text[start_idx:end_idx+1]
-            else:
-                raise ValueError("No JSON found in Claude's response")
+        if json_match:
+            json_text = json_match.group(1).strip()
         else:
-            json_text = '\n'.join(lines[json_start:json_end])
+            # Second try: Assume the entire response is JSON
+            json_text = response_text.strip()
 
         try:
             return json.loads(json_text)
-        except json.JSONDecodeError:
-            # Fallback: try to extract key information manually
-            return self._manual_parse_response(response_text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse JSON from Claude's response: {e}")
 
-    def _manual_parse_response(self, response_text: str) -> Dict[str, Any]:
-        """Fallback parser for when JSON extraction fails."""
-        # This is a simple fallback - in practice, you'd want more robust parsing
-        return {
-            "full_class_name": "unknown",
-            "code_location": {
-                "file": "unknown",
-                "line_start": 0,
-                "line_end": 0
-            },
-            "flop_analysis": {
-                "thinking_process": f"Failed to parse response: {response_text[:200]}...",
-                "parameters": [
-                    {"name": "B", "type": "int", "description": "batch size"},
-                    {"name": "S", "type": "int", "description": "sequence length"}
-                ],
-                "calculation_formula": "0",
-                "module_depends": [],
-                "breakdown": {"unknown": "0"}
-            },
-            "memory_analysis": {
-                "thinking_process": "Parse failed",
-                "parameters": [
-                    {"name": "B", "type": "int", "description": "batch size"},
-                    {"name": "S", "type": "int", "description": "sequence length"},
-                    {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-                ],
-                "reads_calculation_formula": "0",
-                "writes_calculation_formula": "0",
-                "intermediates_calculation_formula": "0",
-                "module_depends": []
-            },
-            "validation": {
-                "human_validated": False
-            }
-        }
 
     def _validate_analysis(self, analysis: Dict[str, Any]) -> None:
         """Validate the structure of the analysis result using JSON Schema."""
