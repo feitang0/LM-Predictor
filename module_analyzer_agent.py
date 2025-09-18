@@ -17,7 +17,7 @@ from jsonschema import validate, ValidationError
 class ModuleAnalyzerAgent:
     """Claude Code agent for analyzing PyTorch module forward functions."""
 
-    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema_v2.json", examples_path: str = "module_db_examples.json"):
+    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema.json", examples_path: str = "module_db_examples.json"):
         """Initialize the agent with Claude Code command."""
         self.claude_command = claude_command
         self.schema_path = schema_path
@@ -106,41 +106,43 @@ class ModuleAnalyzerAgent:
         example_json = json.dumps(example, indent=2)
 
         return f"""
-ultrathink: I need to analyze the FLOPs and memory access patterns of the PyTorch module: {module_spec}
+ultrathink: Build reusable analysis for LLM module: {module_spec}
 
-This could be a class name (e.g., 'Linear') or a full module path (e.g., 'torch.nn.Linear'). Please find the module in the codebase.
+GOAL: Create a modular FLOP and memory analysis that can be reused across different model configurations. This analysis will be stored in a database and composed with other modules.
 
-You have access to:
-- transformers/ - Transformers library source code
-- pytorch/ - PyTorch source code (if needed)
+CRITICAL PRINCIPLE: Maximize reusability through module dependencies rather than hardcoded calculations.
 
-TODO List:
+## Available Resources:
+- transformers/ - Hugging Face transformers source code
+- pytorch/ - PyTorch source code
+- module_db_schema.json - Output schema specification
 
-1. **Find the Module**: Locate {module_spec} in the codebase using search tools
-2. **Read Forward Method**: Extract and read the complete forward() method implementation
-3. **Analyze Operations**: Step by step, identify all computational operations
+## Analysis Steps:
 
-4. **Calculate FLOPs**: For each operation, determine:
-   - Input/output tensor shapes
-   - Number of floating point operations
-   - Dependencies on batch_size (B), sequence_length (S), and model dimensions
+1. **Locate Module**: Find {module_spec} in the codebase and read its forward() method
 
-5. **Memory Analysis**: Analyze memory access patterns:
-   - Parameter reads (weight matrices, biases)
-   - Activation reads/writes
-   - Intermediate tensor storage
+2. **Decompose Operations**: Break down the forward() method into:
+   - **Reusable modules** (any class with its own forward method) → Use {{ModuleName}}() syntax
+   - **Primitive operations** (activations, element-wise math, tensor ops) → Calculate FLOPs directly
 
-6. **Generate Templates**: Create formula templates using the template syntax
+3. **Build Modular Formulas**:
+   - **Modules**: {{torch.nn.Linear}}(${{batch_size}}, ${{input_dim}}, ${{output_dim}})
+   - **Primitives**: Direct FLOP counts (e.g., "4 * ${{B}} * ${{S}} * ${{hidden_size}}" for SiLU activation)
+   - **Parameters**: Use descriptive names (${{B}}, ${{S}}, ${{hidden_size}}, ${{intermediate_size}})
 
-**Template Syntax Requirements**:
-- Parameters: Use ${{param}} syntax (e.g., ${{B}}, ${{S}}, ${{hidden_size}})
-- Module calls: Use {{Module}}() syntax (e.g., {{torch.nn.Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}}))
+4. **Memory Analysis**: Calculate reads/writes/intermediates using same modular approach
 
-**Your response must be ONLY the JSON object below with your actual analysis data:**
+## Example Reference:
+Here's a good example of the expected output format:
 
-```json
 {example_json}
-```
+
+## Output Requirements:
+Return ONLY a JSON object matching module_db_schema.json schema. Use:
+- ${{parameter}} for variables
+- {{ModuleName}}(args) for module dependencies
+- Full class names (e.g., "transformers.models.llama.modeling_llama.LlamaMLP")
+- "human_validated": false in validation section
 """
 
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
@@ -190,7 +192,7 @@ TODO List:
                     {"name": "B", "type": "int", "description": "batch size"},
                     {"name": "S", "type": "int", "description": "sequence length"}
                 ],
-                "formula_template": "0",
+                "calculation_formula": "0",
                 "module_depends": [],
                 "breakdown": {"unknown": "0"}
             },
@@ -201,16 +203,13 @@ TODO List:
                     {"name": "S", "type": "int", "description": "sequence length"},
                     {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
                 ],
-                "reads_template": "0",
-                "writes_template": "0",
-                "intermediates_template": "0",
+                "reads_calculation_formula": "0",
+                "writes_calculation_formula": "0",
+                "intermediates_calculation_formula": "0",
                 "module_depends": []
             },
             "validation": {
-                "status": "failed",
-                "validator": None,
-                "date": None,
-                "notes": "Agent response parsing failed"
+                "human_validated": False
             }
         }
 
@@ -236,8 +235,8 @@ def main():
                        help='Output file path (default: print to stdout)')
     parser.add_argument('--claude_command', type=str, default='claude',
                        help='Claude Code command (default: claude)')
-    parser.add_argument('--schema_path', type=str, default='module_db_schema_v2.json',
-                       help='Path to module database schema file (default: module_db_schema_v2.json)')
+    parser.add_argument('--schema_path', type=str, default='module_db_schema.json',
+                       help='Path to module database schema file (default: module_db_schema.json)')
     parser.add_argument('--examples_path', type=str, default='module_db_examples.json',
                        help='Path to module database examples file (default: module_db_examples.json)')
 
