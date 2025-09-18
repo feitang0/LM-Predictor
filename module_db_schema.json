@@ -1,262 +1,157 @@
 {
-  "schema_version": "1.0",
-  "description": "Database schema for storing PyTorch module FLOP and memory analysis functions",
-  
-  "module_entry": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PyTorch Module Analysis Schema",
+  "description": "JSON Schema for storing PyTorch module FLOP and memory analysis functions",
+  "type": "object",
+  "properties": {
     "full_class_name": {
       "type": "string",
-      "description": "Complete Python class name with full module path",
-      "example": "transformers.models.llama.modeling_llama.LlamaAttention",
-      "required": true
+      "description": "Complete Python class name with full module path"
     },
-    
     "code_location": {
-      "file": {
-        "type": "string",
-        "description": "Relative path to source file containing the class",
-        "example": "transformers/src/transformers/models/llama/modeling_llama.py"
-      },
-      "line_start": {
-        "type": "integer",
-        "description": "Starting line number of forward method",
-        "example": 284
-      },
-      "line_end": {
-        "type": "integer",
-        "description": "Ending line number of forward method",
-        "example": 350
-      }
-    },
-    
-    
-    "flop_analysis": {
-      "thinking_process": {
-        "type": "string",
-        "description": "Step-by-step reasoning for FLOP calculation",
-        "example": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs..."
-      },
-      "parameters": {
-        "type": "array",
-        "description": "List of parameter objects needed for FLOP calculation",
-        "items": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Parameter name used in formula template"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["int", "float", "str", "bool"],
-              "description": "Parameter data type"
-            },
-            "description": {
-              "type": "string",
-              "description": "Human-readable parameter description"
-            }
-          },
-          "required": ["name", "type", "description"]
+      "type": "object",
+      "description": "Source code location information",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Relative path to source file containing the class"
         },
-        "example": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "hidden_size", "type": "int", "description": "model hidden dimension"}
-        ]
-      },
-      "formula_template": {
-        "type": "string",
-        "description": "Formula template using ${param} and {Module}() syntax",
-        "example": "3 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})"
-      },
-      "module_depends": {
-        "type": "array",
-        "description": "List of module dependencies referenced in formula template",
-        "items": {
-          "type": "string"
+        "line_start": {
+          "type": "integer",
+          "description": "Starting line number of forward method",
+          "minimum": 1
         },
-        "example": ["torch.nn.Linear"]
-      },
-      "breakdown": {
-        "type": "object",
-        "description": "FLOP breakdown by operation/submodule using template syntax",
-        "example": {
-          "q_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "k_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})"
+        "line_end": {
+          "type": "integer",
+          "description": "Ending line number of forward method",
+          "minimum": 1
         }
-      }
-    },
-    
-    "memory_analysis": {
-      "thinking_process": {
-        "type": "string",
-        "description": "Step-by-step reasoning for memory access patterns",
-        "example": "Memory access pattern: Weight matrices are read once, input activations read once..."
       },
-      "parameters": {
-        "type": "array",
-        "description": "List of parameter objects needed for memory calculation",
-        "items": {
+      "required": ["file", "line_start", "line_end"],
+      "additionalProperties": false
+    },
+    "flop_analysis": {
+      "type": "object",
+      "description": "FLOP calculation analysis",
+      "properties": {
+        "thinking_process": {
+          "type": "string",
+          "description": "Step-by-step reasoning for FLOP calculation"
+        },
+        "parameters": {
+          "type": "array",
+          "description": "List of parameter objects needed for FLOP calculation",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Parameter name used in calculation formula"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["int", "float", "str", "bool"],
+                "description": "Parameter data type"
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable parameter description"
+              }
+            },
+            "required": ["name", "type", "description"],
+            "additionalProperties": false
+          }
+        },
+        "calculation_formula": {
+          "type": "string",
+          "description": "Calculation formula using ${param} and {Module}() syntax"
+        },
+        "module_depends": {
+          "type": "array",
+          "description": "List of module dependencies referenced in calculation formula",
+          "items": {
+            "type": "string"
+          }
+        },
+        "breakdown": {
           "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "description": "Parameter name used in formula template"
-            },
-            "type": {
-              "type": "string",
-              "enum": ["int", "float", "str", "bool"],
-              "description": "Parameter data type"
-            },
-            "description": {
-              "type": "string",
-              "description": "Human-readable parameter description"
-            }
-          },
-          "required": ["name", "type", "description"]
-        },
-        "example": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-        ]
+          "description": "FLOP breakdown by operation/submodule using calculation formula syntax",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
       },
-      "reads_template": {
-        "type": "string",
-        "description": "Formula template for memory reads using ${param} and {Module}() syntax",
-        "example": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}"
-      },
-      "writes_template": {
-        "type": "string",
-        "description": "Formula template for memory writes using ${param} and {Module}() syntax",
-        "example": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}"
-      },
-      "intermediates_template": {
-        "type": "string",
-        "description": "Formula template for intermediate memory using ${param} and {Module}() syntax",
-        "example": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}"
-      },
-      "module_depends": {
-        "type": "array",
-        "description": "List of module dependencies referenced in memory templates",
-        "items": {
-          "type": "string"
-        },
-        "example": ["torch.nn.Linear"]
-      }
+      "required": ["thinking_process", "parameters", "calculation_formula", "module_depends", "breakdown"],
+      "additionalProperties": false
     },
-    
+    "memory_analysis": {
+      "type": "object",
+      "description": "Memory access pattern analysis",
+      "properties": {
+        "thinking_process": {
+          "type": "string",
+          "description": "Step-by-step reasoning for memory access patterns"
+        },
+        "parameters": {
+          "type": "array",
+          "description": "List of parameter objects needed for memory calculation",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Parameter name used in calculation formula"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["int", "float", "str", "bool"],
+                "description": "Parameter data type"
+              },
+              "description": {
+                "type": "string",
+                "description": "Human-readable parameter description"
+              }
+            },
+            "required": ["name", "type", "description"],
+            "additionalProperties": false
+          }
+        },
+        "reads_calculation_formula": {
+          "type": "string",
+          "description": "Calculation formula for memory reads using ${param} and {Module}() syntax"
+        },
+        "writes_calculation_formula": {
+          "type": "string",
+          "description": "Calculation formula for memory writes using ${param} and {Module}() syntax"
+        },
+        "intermediates_calculation_formula": {
+          "type": "string",
+          "description": "Calculation formula for intermediate memory using ${param} and {Module}() syntax"
+        },
+        "module_depends": {
+          "type": "array",
+          "description": "List of module dependencies referenced in memory calculation formulas",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["thinking_process", "parameters", "reads_calculation_formula", "writes_calculation_formula", "intermediates_calculation_formula", "module_depends"],
+      "additionalProperties": false
+    },
     "validation": {
-      "status": {
-        "type": "string",
-        "enum": ["pending", "validated", "deprecated", "failed"],
-        "description": "Validation status of the analysis function"
+      "type": "object",
+      "description": "Validation status and metadata",
+      "properties": {
+        "human_validated": {
+          "type": "boolean",
+          "description": "Whether the analysis has been validated by a human"
+        }
       },
-      "validator": {
-        "type": ["string", "null"],
-        "description": "Name/ID of person who validated the function"
-      },
-      "date": {
-        "type": ["string", "null"],
-        "format": "YYYY-MM-DD",
-        "description": "Date of validation"
-      },
-      "notes": {
-        "type": ["string", "null"],
-        "description": "Additional validation notes or caveats"
-      }
+      "required": ["human_validated"],
+      "additionalProperties": false
     }
   },
-
-  "example_entries": [
-    {
-      "full_class_name": "torch.nn.Linear",
-      "code_location": {
-        "file": "pytorch/torch/nn/modules/linear.py",
-        "line_start": 124,
-        "line_end": 125
-      },
-      "flop_analysis": {
-        "thinking_process": "Standard matrix multiplication: input @ weight.T",
-        "parameters": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "input_features", "type": "int", "description": "input feature dimension"},
-          {"name": "output_features", "type": "int", "description": "output feature dimension"}
-        ],
-        "formula_template": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
-        "module_depends": [],
-        "breakdown": {
-          "matrix_multiply": "2 * ${B} * ${S} * ${input_features} * ${output_features}"
-        }
-      },
-      "memory_analysis": {
-        "thinking_process": "Memory access pattern: Weight matrix read once, input activations read once",
-        "parameters": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "input_features", "type": "int", "description": "input feature dimension"},
-          {"name": "output_features", "type": "int", "description": "output feature dimension"},
-          {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-        ],
-        "reads_template": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
-        "writes_template": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
-        "intermediates_template": "0",
-        "module_depends": []
-      },
-      "validation": {
-        "status": "validated",
-        "validator": "manual",
-        "date": "2024-01-15",
-        "notes": "Standard linear layer - well understood"
-      }
-    },
-
-    {
-      "full_class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
-      "code_location": {
-        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
-        "line_start": 224,
-        "line_end": 265
-      },
-      "flop_analysis": {
-        "thinking_process": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs...",
-        "parameters": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
-          {"name": "num_heads", "type": "int", "description": "number of attention heads"}
-        ],
-        "formula_template": "3 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "module_depends": ["torch.nn.Linear"],
-        "breakdown": {
-          "q_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "k_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "v_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-          "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})",
-          "o_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})"
-        }
-      },
-      "memory_analysis": {
-        "thinking_process": "Memory access pattern: Weight matrices are read once, input activations read once...",
-        "parameters": [
-          {"name": "B", "type": "int", "description": "batch size"},
-          {"name": "S", "type": "int", "description": "sequence length"},
-          {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
-          {"name": "num_heads", "type": "int", "description": "number of attention heads"},
-          {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-        ],
-        "reads_template": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-        "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-        "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
-        "module_depends": ["torch.nn.Linear"]
-      },
-      "validation": {
-        "status": "pending",
-        "validator": null,
-        "date": null,
-        "notes": "Agent-generated, awaiting human validation"
-      }
-    }
-  ]
+  "required": ["full_class_name", "code_location", "flop_analysis", "memory_analysis", "validation"],
+  "additionalProperties": false
 }
