@@ -9,6 +9,39 @@ from typing import Dict, Any, Optional
 from module_analyzer_agent import ModuleAnalyzerAgent
 
 
+def extract_library_and_class(full_class_name: str) -> tuple[str, str]:
+    """Extract library name and clean class name from full class path.
+
+    Args:
+        full_class_name: e.g. "transformers.models.llama.modeling_llama.LlamaMLP"
+
+    Returns:
+        tuple: (library_name, clean_class_name) e.g. ("transformers", "LlamaMLP")
+    """
+    parts = full_class_name.split('.')
+
+    # Extract library (first part)
+    library = parts[0]
+
+    # Extract class name (last part)
+    class_name = parts[-1]
+
+    return library, class_name
+
+
+def full_class_name_to_key(full_class_name: str) -> str:
+    """Convert full class name to standardized database key.
+
+    Args:
+        full_class_name: e.g. "transformers.models.llama.modeling_llama.LlamaMLP"
+
+    Returns:
+        str: standardized key e.g. "transformers_LlamaMLP"
+    """
+    library, class_name = extract_library_and_class(full_class_name)
+    return f"{library}_{class_name}"
+
+
 class ModuleAnalyzer:
     """Simple cache-first module analyzer."""
 
@@ -30,42 +63,72 @@ class ModuleAnalyzer:
         with open(self.db_path, 'w') as f:
             json.dump(db, f, indent=2)
 
-    def _module_to_key(self, module_path: str) -> str:
-        """Use module path directly as database key."""
-        return module_path
+    def _module_to_key(self, analysis_result: Dict[str, Any]) -> str:
+        """Convert analysis result to standardized database key.
 
-    def is_cached(self, module_path: str) -> bool:
-        """Check if module is in cache."""
+        Args:
+            analysis_result: Analysis result dict containing full_class_name
+
+        Returns:
+            str: standardized database key (e.g., "transformers_LlamaMLP")
+        """
+        full_class_name = analysis_result.get("full_class_name")
+        if not full_class_name:
+            raise ValueError("Analysis result must contain 'full_class_name'")
+
+        return full_class_name_to_key(full_class_name)
+
+    def is_cached(self, module_spec: str) -> bool:
+        """Check if module is in cache by searching for matching class names."""
         db = self._load_db()
-        key = self._module_to_key(module_path)
-        return key in db.get("modules", {})
+        modules = db.get("modules", {})
 
-    def get_cached(self, module_path: str) -> Optional[Dict[str, Any]]:
-        """Get cached module analysis."""
-        if not self.is_cached(module_path):
-            return None
+        # Search for module_spec in both keys and full_class_names
+        for key, module_data in modules.items():
+            full_class_name = module_data.get("full_class_name", "")
 
+            # Check if module_spec matches the key or is the class name from full_class_name
+            if (key == module_spec or
+                module_spec in full_class_name or
+                full_class_name.endswith(f".{module_spec}")):
+                return True
+
+        return False
+
+    def get_cached(self, module_spec: str) -> Optional[Dict[str, Any]]:
+        """Get cached module analysis by searching for matching class names."""
         db = self._load_db()
-        key = self._module_to_key(module_path)
-        return db["modules"][key]
+        modules = db.get("modules", {})
 
-    def analyze_module(self, module_path: str) -> Dict[str, Any]:
+        # Search for module_spec in both keys and full_class_names
+        for key, module_data in modules.items():
+            full_class_name = module_data.get("full_class_name", "")
+
+            # Check if module_spec matches the key or is the class name from full_class_name
+            if (key == module_spec or
+                module_spec in full_class_name or
+                full_class_name.endswith(f".{module_spec}")):
+                return module_data
+
+        return None
+
+    def analyze_module(self, module_spec: str) -> Dict[str, Any]:
         """Analyze module (cache-first)."""
-        print(f"Analyzing {module_path}...")
+        print(f"Analyzing {module_spec}...")
 
         # Check cache first
-        cached = self.get_cached(module_path)
+        cached = self.get_cached(module_spec)
         if cached:
             print(f"✓ Found in cache")
             return cached
 
         # Use agent
         print(f"⚡ Not cached, using agent...")
-        result = self.agent.analyze_module_with_agent(module_path)
+        result = self.agent.analyze_module_with_agent(module_spec)
 
-        # Cache result
+        # Cache result using standardized key
         db = self._load_db()
-        key = self._module_to_key(module_path)
+        key = self._module_to_key(result)
         db["modules"][key] = result
         self._save_db(db)
 
@@ -81,8 +144,8 @@ def main():
         description="Cache-first module analysis with Claude Code agent fallback"
     )
     parser.add_argument(
-        "module_path",
-        help="Module path to analyze (e.g., torch.nn.Linear)"
+        "module_spec",
+        help="Module specification to analyze (e.g., LlamaMLP, torch.nn.Linear)"
     )
     parser.add_argument(
         "--db-path",
@@ -95,7 +158,7 @@ def main():
     analyzer = ModuleAnalyzer(db_path=args.db_path)
 
     try:
-        result = analyzer.analyze_module(args.module_path)
+        result = analyzer.analyze_module(args.module_spec)
         print(json.dumps(result, indent=2))
     except Exception as e:
         print(f"Error: {e}")

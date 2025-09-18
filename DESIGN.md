@@ -23,6 +23,11 @@ Model → Analyze Architecture → Recursive Layer-by-Layer Computation → Resu
 ### 1. Module Analysis Database
 A JSON database storing computational characteristics for each PyTorch module type.
 
+**Naming Convention:**
+- **Database Keys**: `library_ClassName` format (e.g., `transformers_LlamaMLP`, `torch_Linear`)
+- **Full Class Names**: Complete Python paths (e.g., `transformers.models.llama.modeling_llama.LlamaMLP`)
+- **Generated Classes**: `LibraryClassName` format (e.g., `TransformersLlamaMLP`, `TorchLinear`)
+
 **Formula Syntax:**
 - **Parameters**: `${param_name}` - represent parameters substituted with actual values
 - **Module Calls**: `{ModuleName}` - represent dependent module names for FLOP and memory calculation
@@ -139,24 +144,25 @@ A JSON database storing computational characteristics for each PyTorch module ty
 #### D. Module Registry (`generated_modules/registry.py`)
 - Auto-discover generated module classes using library namespacing
 - Resolve module dependencies with circular detection
-- Handle path-to-name conversion: `torch.nn.Linear` → `torch_Linear`
+- Handle path-to-name conversion: `torch.nn.Linear` → `torch_Linear` (database key)
 - Provide user-friendly interface: `compute_flops("torch.nn.Linear", ...)`
 
-#### E. Generated Modules (`generated_modules/*/`)
+#### E. Generated Modules (`generated_modules/`)
 - Python classes auto-generated from JSON formula templates
-- Library-organized directory structure prevents naming conflicts
-- Clean class names: `TorchLinear`, `TransformersLlamaAttention`
+- Flat directory structure with descriptive class names prevents conflicts
+- Clean class names: `TorchLinear`, `TransformersLlamaMlp`
 - Recursive formula evaluation with parameter substitution
 
 **File Organization:**
 - One file per module type for clear separation and maintainability
-- Library-based directory structure (`torch/`, `transformers/`) prevents naming conflicts
-- Consistent naming convention: `library_class_name.py` (e.g., `torch_linear.py`, `transformers_llama_attention.py`)
+- Flat structure in generated_modules/ directory
+- Library prefix in class names prevents naming conflicts
+- CamelCase to snake_case file naming: `TorchLinear` → `torch_linear.py`, `TransformersLlamaMLP` → `transformers_llama_mlp.py`
 
 **Class Structure:**
 ```python
-# generated_modules/torch/torch_linear.py
-from ..base import BaseModule
+# generated_modules/torch_linear.py
+from .base import BaseModule
 from typing import Dict, Any, List
 
 class TorchLinear(BaseModule):
@@ -187,19 +193,17 @@ class TorchLinear(BaseModule):
 LM-Predictor/
 ├── model_analyzer.py        # Main entry point for model FLOP/memory analysis
 ├── module_analyzer.py       # Cache-first module analysis with Claude Code agent fallback
+├── module_generator_agent.py # Claude Code agent for generating module files
 ├── module_db.json          # Module analysis database (formula templates only)
-├── generated_modules/       # Generated Python modules
+├── generated_modules/       # Generated Python modules (flat structure)
 │   ├── __init__.py         # Registry and convenience functions
 │   ├── registry.py         # ModuleRegistry with auto-discovery
 │   ├── base.py            # BaseModule abstract class
-│   ├── torch/             # PyTorch core modules
-│   │   ├── torch_linear.py   # torch.nn.Linear → TorchLinear
-│   │   ├── torch_layer_norm.py # torch.nn.LayerNorm → TorchLayerNorm
-│   │   └── ...
-│   └── transformers/      # Transformers library modules
-│       ├── transformers_llama_attention.py  # transformers_LlamaAttention
-│       ├── transformers_bert_attention.py   # transformers_BertAttention
-│       └── ...
+│   ├── torch_linear.py     # torch.nn.Linear → TorchLinear (database key: torch_Linear)
+│   ├── torch_layer_norm.py # torch.nn.LayerNorm → TorchLayerNorm (database key: torch_LayerNorm)
+│   ├── transformers_llama_mlp.py # transformers.LlamaMLP → TransformersLlamaMLP (database key: transformers_LlamaMLP)
+│   ├── transformers_bert_attention.py # transformers.BertAttention → TransformersBertAttention
+│   └── ...
 ├── transformers/          # Submodule for source code analysis
 ├── pytorch/               # Submodule for source code analysis
 ├── DESIGN.md             # This documentation
