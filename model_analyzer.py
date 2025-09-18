@@ -60,6 +60,7 @@ class ModelAnalyzer:
         """Inspect and return the hierarchical model structure."""
         if self.model is None:
             self.load_model_architecture()
+            print(self.model)
 
         def module_to_dict(module, path=""):
             """Convert module to analysis-friendly dict."""
@@ -88,6 +89,7 @@ class ModelAnalyzer:
 
             # Recursively process children
             for name, child in children.items():
+                print(child)
                 child_path = f"{path}.{name}" if path else name
                 module_info["children"][name] = module_to_dict(child, child_path)
 
@@ -298,8 +300,8 @@ def main():
 
         if args.inspect_only:
             analyzer.load_model_architecture()
-            structure = analyzer.inspect_model_structure()
-            print(json.dumps(structure, indent=2, default=str))
+            # structure = analyzer.inspect_model_structure()
+            print(self.model)
         else:
             results = analyzer.analyze(
                 seqlen=args.seq_len,

@@ -29,7 +29,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
 
 ```json
 {
-  "transformers__models__llama__modeling__llama__LlamaAttention": {
+  "transformers_LlamaAttention": {
     "full_class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
     "code_location": {
       "file": "transformers/src/transformers/models/llama/modeling_llama.py",
@@ -44,7 +44,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
         {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
         {"name": "num_heads", "type": "int", "description": "number of attention heads"}
       ],
-      "formula_template": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+      "calculation_formula": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
       "module_depends": ["torch__nn__Linear"],
       "breakdown": {
         "q_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
@@ -62,20 +62,17 @@ A JSON database storing computational characteristics for each PyTorch module ty
         {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
         {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
       ],
-      "reads_template": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "writes_template": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "intermediates_template": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
+      "reads_calculation_formula": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+      "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+      "intermediates_calculation_formula": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
       "module_depends": ["torch__nn__Linear"]
     },
     "validation": {
-      "status": "pending",
-      "validator": null,
-      "date": null,
-      "notes": "Agent-generated, awaiting human validation"
+      "human_validated": false
     }
   },
 
-  "torch__nn__Linear": {
+  "torch_Linear": {
     "full_class_name": "torch.nn.Linear",
     "code_location": {
       "file": "pytorch/torch/nn/modules/linear.py",
@@ -90,7 +87,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
         {"name": "input_features", "type": "int", "description": "input feature dimension"},
         {"name": "output_features", "type": "int", "description": "output feature dimension"}
       ],
-      "formula_template": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
+      "calculation_formula": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
       "module_depends": [],
       "breakdown": {
         "matrix_multiply": "2 * ${B} * ${S} * ${input_features} * ${output_features}"
@@ -105,16 +102,13 @@ A JSON database storing computational characteristics for each PyTorch module ty
         {"name": "output_features", "type": "int", "description": "output feature dimension"},
         {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
       ],
-      "reads_template": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
-      "writes_template": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
-      "intermediates_template": "0",
+      "reads_calculation_formula": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
+      "writes_calculation_formula": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
+      "intermediates_calculation_formula": "0",
       "module_depends": []
     },
     "validation": {
-      "status": "validated",
-      "validator": "manual",
-      "date": "2024-01-15",
-      "notes": "Standard linear layer - well understood"
+      "human_validated": true
     }
   }
 }
@@ -145,7 +139,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
 #### D. Module Registry (`generated_modules/registry.py`)
 - Auto-discover generated module classes using library namespacing
 - Resolve module dependencies with circular detection
-- Handle path-to-name conversion: `torch.nn.Linear` → `torch__nn__Linear`
+- Handle path-to-name conversion: `torch.nn.Linear` → `torch_Linear`
 - Provide user-friendly interface: `compute_flops("torch.nn.Linear", ...)`
 
 #### E. Generated Modules (`generated_modules/*/`)
@@ -157,11 +151,11 @@ A JSON database storing computational characteristics for each PyTorch module ty
 **File Organization:**
 - One file per module type for clear separation and maintainability
 - Library-based directory structure (`torch/`, `transformers/`) prevents naming conflicts
-- Consistent naming convention: `module_path.py` where dots/underscores become underscores
+- Consistent naming convention: `library_class_name.py` (e.g., `torch_linear.py`, `transformers_llama_attention.py`)
 
 **Class Structure:**
 ```python
-# generated_modules/torch/nn_linear.py
+# generated_modules/torch/torch_linear.py
 from ..base import BaseModule
 from typing import Dict, Any, List
 
@@ -199,12 +193,12 @@ LM-Predictor/
 │   ├── registry.py         # ModuleRegistry with auto-discovery
 │   ├── base.py            # BaseModule abstract class
 │   ├── torch/             # PyTorch core modules
-│   │   ├── nn_linear.py   # torch.nn.Linear → TorchLinear
-│   │   ├── nn_layer_norm.py # torch.nn.LayerNorm → TorchLayerNorm
+│   │   ├── torch_linear.py   # torch.nn.Linear → TorchLinear
+│   │   ├── torch_layer_norm.py # torch.nn.LayerNorm → TorchLayerNorm
 │   │   └── ...
 │   └── transformers/      # Transformers library modules
-│       ├── models_llama_modeling_llama_llama_attention.py
-│       ├── models_bert_modeling_bert_bert_attention.py
+│       ├── transformers_llama_attention.py  # transformers_LlamaAttention
+│       ├── transformers_bert_attention.py   # transformers_BertAttention
 │       └── ...
 ├── transformers/          # Submodule for source code analysis
 ├── pytorch/               # Submodule for source code analysis
