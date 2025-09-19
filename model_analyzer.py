@@ -57,128 +57,65 @@ class ModelAnalyzer:
         print(f"✓ Loaded {self.model.__class__.__name__} architecture")
 
     def inspect_model_structure(self) -> Dict[str, Any]:
-        """Inspect and return the hierarchical model structure."""
+        """Inspect model structure using simple module representation."""
         if self.model is None:
             self.load_model_architecture()
 
-        outer_self = self
-
         def module_to_dict(module):
-            """Recursively convert a module into a nested dict."""
             children = dict(module.named_children())
             if not children:  # leaf node
-                # Get full class name with module path
-                full_class_name = f"{module.__class__.__module__}.{module.__class__.__name__}"
-
-                # Parse parameters from str(module)
-                module_str = str(module)
-                param_start = module_str.find('(')
-                param_end = module_str.rfind(')')
-
-                if param_start != -1 and param_end != -1:
-                    param_str = module_str[param_start+1:param_end]
-                    parsed_params = outer_self._parse_module_params(param_str)
-                else:
-                    parsed_params = {}
-
-                return {
-                    "class_name": full_class_name,
-                    "parameters": parsed_params if parsed_params else None
-                }
+                return self.module_repr(module)
             return {name: module_to_dict(child) for name, child in children.items()}
 
         return module_to_dict(self.model)
 
-    def _parse_module_params(self, param_str: str) -> Dict[str, Any]:
-        """Parse module parameter string into structured data."""
-        if not param_str.strip():
-            return {}
+    def module_repr(self, module) -> Dict[str, Any]:
+        """Simple module representation for leaf nodes."""
+        return {
+            "class_name": f"{module.__class__.__module__}.{module.__class__.__name__}",
+            "repr": str(module)
+        }
 
-        positional = []
-        named = {}
+    def collect_module_classes(self, module, classes=None):
+        """Collect all unique module classes in the model."""
+        if classes is None:
+            classes = {}
 
-        # Split by commas, but be careful about commas inside tuples
-        parts = []
-        current_part = ""
-        paren_depth = 0
+        simple_name = module.__class__.__name__
+        full_name = f"{module.__class__.__module__}.{module.__class__.__name__}"
+        classes[simple_name] = full_name
 
-        for char in param_str:
-            if char == '(':
-                paren_depth += 1
-            elif char == ')':
-                paren_depth -= 1
-            elif char == ',' and paren_depth == 0:
-                parts.append(current_part.strip())
-                current_part = ""
-                continue
-            current_part += char
+        for child in module.children():
+            self.collect_module_classes(child, classes)
 
-        if current_part.strip():
-            parts.append(current_part.strip())
+        return classes
 
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
+    def print_enhanced_model(self) -> None:
+        """Print model with enhanced class names while keeping compact format."""
+        if self.model is None:
+            self.load_model_architecture()
 
-            if '=' in part:
-                # Named parameter
-                key, value = part.split('=', 1)
-                key = key.strip()
-                value = value.strip()
-                named[key] = self._parse_value(value)
-            else:
-                # Positional parameter
-                positional.append(self._parse_value(part))
+        # Get all module class mappings
+        class_mappings = self.collect_module_classes(self.model)
 
-        # Only include keys that have content
-        params = {}
-        if positional:
-            params["positional"] = positional
-        if named:
-            params["named"] = named
+        # Get original string representation
+        model_str = str(self.model)
 
-        return params
+        # Sort by length (longest first) to avoid partial replacements
+        sorted_mappings = sorted(class_mappings.items(), key=lambda x: len(x[0]), reverse=True)
 
-    def _parse_value(self, value_str: str) -> Any:
-        """Parse a single parameter value."""
-        value_str = value_str.strip()
+        # Replace each simple class name with full class name
+        # Use word boundary replacement to avoid partial matches
+        import re
+        enhanced_str = model_str
+        for simple_name, full_name in sorted_mappings:
+            # Use regex with word boundary to ensure exact class name matches
+            pattern = r'\b' + re.escape(simple_name) + r'\('
+            replacement = full_name + "("
+            enhanced_str = re.sub(pattern, replacement, enhanced_str)
 
-        # Handle tuples like (4096,) or (256, 512)
-        if value_str.startswith('(') and value_str.endswith(')'):
-            inner = value_str[1:-1].strip()
-            if not inner:
-                return ()
-            # Split by comma and parse each element
-            elements = [self._parse_value(elem.strip()) for elem in inner.split(',') if elem.strip()]
-            return tuple(elements)
+        print(enhanced_str)
 
-        # Handle booleans
-        if value_str == 'True':
-            return True
-        elif value_str == 'False':
-            return False
-        elif value_str == 'None':
-            return None
-
-        # Handle numbers
-        try:
-            # Try integer first
-            if '.' not in value_str and 'e' not in value_str.lower():
-                return int(value_str)
-            else:
-                # Try float
-                return float(value_str)
-        except ValueError:
-            pass
-
-        # Handle strings (remove quotes if present)
-        if (value_str.startswith("'") and value_str.endswith("'")) or \
-           (value_str.startswith('"') and value_str.endswith('"')):
-            return value_str[1:-1]
-
-        # Return as string if nothing else works
-        return value_str
 
     def analyze_module(self, module_info: Dict[str, Any], params: AnalysisParams) -> Dict[str, Any]:
         """Analyze a single module using database/agent."""
@@ -375,6 +312,8 @@ def main():
                        help='Output file path (default: auto-generated)')
     parser.add_argument('--inspect_only', action='store_true',
                        help='Only inspect model structure without analysis')
+    parser.add_argument('--unique_modules', action='store_true',
+                       help='Output unique module classes found in the model')
 
     args = parser.parse_args()
 
@@ -383,8 +322,14 @@ def main():
 
         if args.inspect_only:
             analyzer.load_model_architecture()
-            structure = analyzer.inspect_model_structure()
-            print(json.dumps(structure, indent=2))
+            analyzer.print_enhanced_model()
+            # structure = analyzer.inspect_model_structure()
+            # print(json.dumps(structure, indent=2))
+        elif args.unique_modules:
+            analyzer.load_model_architecture()
+            unique_modules = analyzer.collect_module_classes(analyzer.model)
+            for full_name in sorted(set(unique_modules.values())):
+                print(full_name)
         else:
             results = analyzer.analyze(
                 seqlen=args.seq_len,

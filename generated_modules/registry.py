@@ -35,39 +35,27 @@ class ModuleRegistry:
     def _load_module_class(self, module_key: str, full_class_name: str) -> Optional[Type[BaseModule]]:
         """Load a specific module class by key."""
         try:
-            # Define specific mappings for known modules
-            module_mappings = {
-                "transformers_LlamaRMSNorm": {
-                    "module_path": "generated_modules.transformers.transformers_llama_rms_norm",
-                    "class_name": "TransformersLlamaRMSNorm"
-                },
-                "transformers_LlamaMLP": {
-                    "module_path": "generated_modules.transformers.transformers_llama_mlp",
-                    "class_name": "TransformersLlamaMLP"
-                },
-                "transformers_LlamaRotaryEmbedding": {
-                    "module_path": "generated_modules.transformers.transformers_llama_rotary_embedding",
-                    "class_name": "TransformersLlamaRotaryEmbedding"
-                }
-            }
+            # Convert module_key to flat structure paths
+            # module_key format: library_ClassName -> library_class_name.py
+            if "_" in module_key:
+                # Convert library_ClassName to library_class_name
+                snake_case_name = ""
+                for i, char in enumerate(module_key):
+                    if char.isupper() and i > 0:
+                        snake_case_name += "_"
+                    snake_case_name += char.lower()
 
-            # Check if we have a specific mapping
-            if module_key in module_mappings:
-                mapping = module_mappings[module_key]
-                module_path = mapping["module_path"]
-                class_name = mapping["class_name"]
-            else:
-                # Fallback to pattern-based approach
-                if full_class_name.startswith("transformers."):
-                    module_path = f"generated_modules.transformers.{module_key.lower()}"
-                    class_name = f"Transformers{module_key}"
-                elif full_class_name.startswith("torch."):
-                    # Convert torch.nn.Linear to torch_nn_linear
-                    parts = full_class_name.replace("torch.", "").replace(".", "_").lower()
-                    module_path = f"generated_modules.torch.{parts}"
-                    class_name = f"Torch{module_key}"
+                module_path = f"generated_modules.{snake_case_name}"
+
+                # Generate class name from module_key: transformers_LlamaRMSNorm -> TransformersLlamaRMSNorm
+                parts = module_key.split("_", 1)
+                if len(parts) == 2:
+                    library, class_part = parts
+                    class_name = f"{library.capitalize()}{class_part}"
                 else:
-                    return None
+                    class_name = module_key
+            else:
+                return None
 
             # Import the module and get the class
             module = importlib.import_module(module_path)
