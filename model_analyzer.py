@@ -60,42 +60,125 @@ class ModelAnalyzer:
         """Inspect and return the hierarchical model structure."""
         if self.model is None:
             self.load_model_architecture()
-            print(self.model)
 
-        def module_to_dict(module, path=""):
-            """Convert module to analysis-friendly dict."""
+        outer_self = self
+
+        def module_to_dict(module):
+            """Recursively convert a module into a nested dict."""
             children = dict(module.named_children())
+            if not children:  # leaf node
+                # Get full class name with module path
+                full_class_name = f"{module.__class__.__module__}.{module.__class__.__name__}"
 
-            module_info = {
-                "class_name": module.__class__.__name__,
-                "full_class_name": f"{module.__class__.__module__}.{module.__class__.__name__}",
-                "path": path,
-                "parameters": {},
-                "children": {}
-            }
+                # Parse parameters from str(module)
+                module_str = str(module)
+                param_start = module_str.find('(')
+                param_end = module_str.rfind(')')
 
-            # Extract key parameters for analysis
-            if hasattr(module, 'in_features') and hasattr(module, 'out_features'):
-                module_info["parameters"]["input_features"] = module.in_features
-                module_info["parameters"]["output_features"] = module.out_features
-            if hasattr(module, 'hidden_size'):
-                module_info["parameters"]["hidden_size"] = module.hidden_size
-            if hasattr(module, 'intermediate_size'):
-                module_info["parameters"]["intermediate_size"] = module.intermediate_size
-            if hasattr(module, 'num_attention_heads'):
-                module_info["parameters"]["num_attention_heads"] = module.num_attention_heads
-            if hasattr(module, 'num_key_value_heads'):
-                module_info["parameters"]["num_key_value_heads"] = module.num_key_value_heads
+                if param_start != -1 and param_end != -1:
+                    param_str = module_str[param_start+1:param_end]
+                    parsed_params = outer_self._parse_module_params(param_str)
+                else:
+                    parsed_params = {}
 
-            # Recursively process children
-            for name, child in children.items():
-                print(child)
-                child_path = f"{path}.{name}" if path else name
-                module_info["children"][name] = module_to_dict(child, child_path)
+                return {
+                    "class_name": full_class_name,
+                    "parameters": parsed_params if parsed_params else None
+                }
+            return {name: module_to_dict(child) for name, child in children.items()}
 
-            return module_info
+        return module_to_dict(self.model)
 
-        return module_to_dict(self.model, "model")
+    def _parse_module_params(self, param_str: str) -> Dict[str, Any]:
+        """Parse module parameter string into structured data."""
+        if not param_str.strip():
+            return {}
+
+        positional = []
+        named = {}
+
+        # Split by commas, but be careful about commas inside tuples
+        parts = []
+        current_part = ""
+        paren_depth = 0
+
+        for char in param_str:
+            if char == '(':
+                paren_depth += 1
+            elif char == ')':
+                paren_depth -= 1
+            elif char == ',' and paren_depth == 0:
+                parts.append(current_part.strip())
+                current_part = ""
+                continue
+            current_part += char
+
+        if current_part.strip():
+            parts.append(current_part.strip())
+
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            if '=' in part:
+                # Named parameter
+                key, value = part.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                named[key] = self._parse_value(value)
+            else:
+                # Positional parameter
+                positional.append(self._parse_value(part))
+
+        # Only include keys that have content
+        params = {}
+        if positional:
+            params["positional"] = positional
+        if named:
+            params["named"] = named
+
+        return params
+
+    def _parse_value(self, value_str: str) -> Any:
+        """Parse a single parameter value."""
+        value_str = value_str.strip()
+
+        # Handle tuples like (4096,) or (256, 512)
+        if value_str.startswith('(') and value_str.endswith(')'):
+            inner = value_str[1:-1].strip()
+            if not inner:
+                return ()
+            # Split by comma and parse each element
+            elements = [self._parse_value(elem.strip()) for elem in inner.split(',') if elem.strip()]
+            return tuple(elements)
+
+        # Handle booleans
+        if value_str == 'True':
+            return True
+        elif value_str == 'False':
+            return False
+        elif value_str == 'None':
+            return None
+
+        # Handle numbers
+        try:
+            # Try integer first
+            if '.' not in value_str and 'e' not in value_str.lower():
+                return int(value_str)
+            else:
+                # Try float
+                return float(value_str)
+        except ValueError:
+            pass
+
+        # Handle strings (remove quotes if present)
+        if (value_str.startswith("'") and value_str.endswith("'")) or \
+           (value_str.startswith('"') and value_str.endswith('"')):
+            return value_str[1:-1]
+
+        # Return as string if nothing else works
+        return value_str
 
     def analyze_module(self, module_info: Dict[str, Any], params: AnalysisParams) -> Dict[str, Any]:
         """Analyze a single module using database/agent."""
@@ -300,8 +383,8 @@ def main():
 
         if args.inspect_only:
             analyzer.load_model_architecture()
-            # structure = analyzer.inspect_model_structure()
-            print(self.model)
+            structure = analyzer.inspect_model_structure()
+            print(json.dumps(structure, indent=2))
         else:
             results = analyzer.analyze(
                 seqlen=args.seq_len,
