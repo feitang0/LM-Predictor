@@ -32,92 +32,9 @@ A JSON database storing computational characteristics for each PyTorch module ty
 - **Parameters**: `${param_name}` - represent parameters substituted with actual values
 - **Module Calls**: `{ModuleName}` - represent dependent module names for FLOP and memory calculation
 
-```json
-{
-  "transformers_LlamaAttention": {
-    "full_class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
-    "code_location": {
-      "file": "transformers/src/transformers/models/llama/modeling_llama.py",
-      "line_start": 224,
-      "line_end": 265
-    },
-    "flop_analysis": {
-      "thinking_process": "Step-by-step reasoning: 1) Q,K,V projections each do matrix multiply of [B,S,H] x [H,H] = 2*B*S*H^2 FLOPs...",
-      "parameters": [
-        {"name": "B", "type": "int", "description": "batch size"},
-        {"name": "S", "type": "int", "description": "sequence length"},
-        {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
-        {"name": "num_heads", "type": "int", "description": "number of attention heads"}
-      ],
-      "calculation_formula": "3 * {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-      "module_depends": ["torch__nn__Linear"],
-      "breakdown": {
-        "q_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "k_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "v_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})",
-        "o_proj": "{torch__nn__Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})"
-      }
-    },
-    "memory_analysis": {
-      "thinking_process": "Memory access pattern: Weight matrices are read once, input activations read once...",
-      "parameters": [
-        {"name": "B", "type": "int", "description": "batch size"},
-        {"name": "S", "type": "int", "description": "sequence length"},
-        {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
-        {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-      ],
-      "reads_calculation_formula": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "intermediates_calculation_formula": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
-      "module_depends": ["torch__nn__Linear"]
-    },
-    "validation": {
-      "human_validated": false
-    }
-  },
-
-  "torch_Linear": {
-    "full_class_name": "torch.nn.Linear",
-    "code_location": {
-      "file": "pytorch/torch/nn/modules/linear.py",
-      "line_start": 124,
-      "line_end": 125
-    },
-    "flop_analysis": {
-      "thinking_process": "Standard matrix multiplication: input @ weight.T",
-      "parameters": [
-        {"name": "B", "type": "int", "description": "batch size"},
-        {"name": "S", "type": "int", "description": "sequence length"},
-        {"name": "input_features", "type": "int", "description": "input feature dimension"},
-        {"name": "output_features", "type": "int", "description": "output feature dimension"}
-      ],
-      "calculation_formula": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
-      "module_depends": [],
-      "breakdown": {
-        "matrix_multiply": "2 * ${B} * ${S} * ${input_features} * ${output_features}"
-      }
-    },
-    "memory_analysis": {
-      "thinking_process": "Memory access pattern: Weight matrix read once, input activations read once",
-      "parameters": [
-        {"name": "B", "type": "int", "description": "batch size"},
-        {"name": "S", "type": "int", "description": "sequence length"},
-        {"name": "input_features", "type": "int", "description": "input feature dimension"},
-        {"name": "output_features", "type": "int", "description": "output feature dimension"},
-        {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
-      ],
-      "reads_calculation_formula": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
-      "writes_calculation_formula": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
-      "intermediates_calculation_formula": "0",
-      "module_depends": []
-    },
-    "validation": {
-      "human_validated": true
-    }
-  }
-}
-```
+**Schema & Examples:**
+- JSON Schema: See `module_db_schema.json` for the complete specification
+- Example Entries: See `module_db_examples.json` for torch.nn.Linear and LlamaAttention examples
 
 ### 2. Core Components
 
@@ -133,7 +50,7 @@ A JSON database storing computational characteristics for each PyTorch module ty
 - For known modules: use cached formula templates from database
 - For unknown modules: analyze using Claude Code agent → cache to database
 - Generate safe JSON formula templates (not executable code)
-- Focus on template generation and database management
+- Focus on calculation formula generation and database management
 
 #### C. Module Database (`module_db.json`)
 - Store formula templates using `${param}` and `{Module}()` syntax (same for FLOP and memory)
@@ -207,7 +124,5 @@ LM-Predictor/
 ├── transformers/          # Submodule for source code analysis
 ├── pytorch/               # Submodule for source code analysis
 ├── DESIGN.md             # This documentation
-├── PROGRESS.md           # Implementation tracking
-├── SCRATCHPAD.md         # Working notes and issues
 └── CLAUDE.md            # Development environment and commands
 ```
