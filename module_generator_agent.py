@@ -17,22 +17,58 @@ from dotenv import dotenv_values
 class ModuleGeneratorAgent:
     """Claude Code agent for generating Python module files from analysis responses."""
 
-    def __init__(self, claude_command: str = "claude", output_dir: str = "generated_modules"):
-        """Initialize the agent with Claude Code command."""
-        self.claude_command = claude_command
-        self.output_dir = Path(output_dir)
+    def __init__(self, module_db_file: str = "module_db.json"):
+        """Initialize the agent with module database file."""
+        self.claude_command = "claude"
+        self.module_db_file = module_db_file
 
-    def generate_module_with_agent(self, response_file: str) -> Dict[str, str]:
+    def query_module_database(self, full_class_name: str) -> Dict[str, Any] | None:
         """
-        Use Claude Code to generate a Python module file from analysis response.
+        Query the module database for a specific full class name.
 
         Args:
-            response_file: Path to JSON response file from agent analysis
+            full_class_name: The full class name to search for (e.g., 'transformers.models.llama.modeling_llama.LlamaMLP')
+
+        Returns:
+            Module data dictionary if found, None if not found
+        """
+        try:
+            if not os.path.exists(self.module_db_file):
+                return None
+
+            with open(self.module_db_file, 'r') as f:
+                db = json.load(f)
+
+            # Search through all modules in the database
+            for module_key, module_data in db.get("modules", {}).items():
+                if module_data.get("full_class_name") == full_class_name:
+                    return module_data
+
+            return None
+        except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
+            print(f"Error reading module database: {e}")
+            return None
+
+    def generate_module_with_agent(self, full_class_name: str) -> Dict[str, str]:
+        """
+        Use Claude Code to generate a Python module file from module database.
+
+        Args:
+            full_class_name: Full class name to generate module for (e.g., 'transformers.models.llama.modeling_llama.LlamaMLP')
 
         Returns:
             Dictionary with generation results including file paths
         """
-        prompt = self._create_generation_prompt(response_file)
+        # Query the module database first
+        module_data = self.query_module_database(full_class_name)
+
+        if module_data is None:
+            return {
+                "status": "error",
+                "error": f"Module database does not contain '{full_class_name}'"
+            }
+
+        prompt = self._create_generation_prompt(module_data)
 
         print("=== PROMPT ===")
         print(prompt)
@@ -73,26 +109,30 @@ class ModuleGeneratorAgent:
             return generation_result
 
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Claude Code generation timed out for {response_file}")
+            raise RuntimeError(f"Claude Code generation timed out for {full_class_name}")
         except json.JSONDecodeError as e:
             print(f"Claude stdout: {result.stdout}")
             print(f"Claude stderr: {result.stderr}")
             raise RuntimeError(f"Failed to parse Claude response: {e}")
         except Exception as e:
-            raise RuntimeError(f"Generation failed for {response_file}: {e}")
+            raise RuntimeError(f"Generation failed for {full_class_name}: {e}")
 
-    def _create_generation_prompt(self, response_file: str) -> str:
+    def _create_generation_prompt(self, module_data: Dict[str, Any]) -> str:
         """Create the prompt for Claude Code to generate module files."""
+        full_class_name = module_data.get("full_class_name", "unknown")
         return f"""
 ultrathink: Generate Python module file from agent analysis response
 
 GOAL: Create a callable Python module file from the agent analysis response using flat directory structure
 
 Available Resources:
-- {response_file} - Agent analysis response with FLOP/memory formulas
+- Module analysis data for {full_class_name} with FLOP/memory formulas
 - generated_modules/ - Directory for generated modules (flat structure)
 - generated_modules/base.py - BaseModule abstract class
 - DESIGN.md - System architecture reference
+
+Module Data:
+{json.dumps(module_data, indent=2)}
 
 IMPORTANT:
 1. Follow the naming conventions from updated DESIGN.md exactly
@@ -101,7 +141,7 @@ IMPORTANT:
 
 TODO List:
 
-1. **Read Response**: Load and examine the agent analysis from {response_file}
+1. **Process Data**: Examine the provided module analysis data for {full_class_name}
 
 2. **Determine Paths**: Convert full_class_name to required paths (flat structure):
    - For torch.nn.Linear: class_name="TorchLinear", file_name="torch_linear.py"
@@ -182,28 +222,18 @@ Your final response must contain ONLY: SUCCESS or FAIL
 
 def main():
     """Command-line interface for the module generator agent."""
-    parser = argparse.ArgumentParser(description='Generate Python module files from analysis responses')
-    parser.add_argument('response_file', type=str,
-                       help='Path to JSON response file from agent analysis')
-    parser.add_argument('--output-dir', type=str, default='generated_modules',
-                       help='Output directory for generated modules (default: generated_modules)')
-    parser.add_argument('--claude-command', type=str, default='claude',
-                       help='Claude Code command (default: claude)')
+    parser = argparse.ArgumentParser(description='Generate Python module files from module database')
+    parser.add_argument('full_class_name', type=str,
+                       help='Full class name to generate module for (e.g., transformers.models.llama.modeling_llama.LlamaMLP)')
+    parser.add_argument('--module-db', type=str, default='module_db.json',
+                       help='Path to module database file (default: module_db.json)')
 
     args = parser.parse_args()
 
-    # Validate input file exists
-    if not os.path.exists(args.response_file):
-        print(f"Error: Response file not found: {args.response_file}", file=sys.stderr)
-        sys.exit(1)
-
     try:
-        agent = ModuleGeneratorAgent(
-            claude_command=args.claude_command,
-            output_dir=args.output_dir
-        )
+        agent = ModuleGeneratorAgent(module_db_file=args.module_db)
 
-        result = agent.generate_module_with_agent(response_file=args.response_file)
+        result = agent.generate_module_with_agent(full_class_name=args.full_class_name)
 
         if result["status"] == "success":
             print(f"✅ Module generation successful!")

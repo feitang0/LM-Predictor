@@ -33,29 +33,29 @@ class ModuleRegistry:
                 self._modules[full_class_name] = module_class
 
     def _load_module_class(self, module_key: str, full_class_name: str) -> Optional[Type[BaseModule]]:
-        """Load a specific module class by key."""
+        """Load a specific module class by key using manual mapping."""
         try:
-            # Convert module_key to flat structure paths
-            # module_key format: library_ClassName -> library_class_name.py
-            if "_" in module_key:
-                # Convert library_ClassName to library_class_name
-                snake_case_name = ""
-                for i, char in enumerate(module_key):
-                    if char.isupper() and i > 0:
-                        snake_case_name += "_"
-                    snake_case_name += char.lower()
+            # Manual mapping for reliable module loading
+            # Format: module_key -> (filename, class_name)
+            module_mapping = {
+                "transformers_LlamaMLP": ("transformers_llama_mlp", "TransformersLlamaMLP"),
+                "torch_SiLU": ("torch_silu", "TorchSiLU"),
+                "torch_ModuleList": ("torch_module_list", "TorchModuleList"),
+                "torch_Linear": ("torch_linear", "TorchLinear"),
+                "torch_Embedding": ("torch_embedding", "TorchEmbedding"),
+                "transformers_LlamaDecoderLayer": ("transformers_llama_decoder_layer", "TransformersLlamaDecoderLayer"),
+                "transformers_LlamaForCausalLM": ("transformers_llama_for_causal_lm", "TransformersLlamaForCausalLM"),
+                "transformers_LlamaModel": ("transformers_llama_model", "TransformersLlamaModel"),
+                "transformers_LlamaRMSNorm": ("transformers_llama_rms_norm", "TransformersLlamaRMSNorm"),
+                "transformers_LlamaRotaryEmbedding": ("transformers_llama_rotary_embedding", "TransformersLlamaRotaryEmbedding"),
+                "transformers_LlamaSdpaAttention": ("transformers_llama_sdpa_attention", "TransformersLlamaSdpaAttention"),
+            }
 
-                module_path = f"generated_modules.{snake_case_name}"
-
-                # Generate class name from module_key: transformers_LlamaRMSNorm -> TransformersLlamaRMSNorm
-                parts = module_key.split("_", 1)
-                if len(parts) == 2:
-                    library, class_part = parts
-                    class_name = f"{library.capitalize()}{class_part}"
-                else:
-                    class_name = module_key
-            else:
+            if module_key not in module_mapping:
                 return None
+
+            module_file, class_name = module_mapping[module_key]
+            module_path = f"generated_modules.{module_file}"
 
             # Import the module and get the class
             module = importlib.import_module(module_path)
