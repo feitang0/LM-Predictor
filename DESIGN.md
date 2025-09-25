@@ -20,6 +20,109 @@ Model → Analyze Architecture → Recursive Layer-by-Layer Computation → Resu
                                            └── Continue computation
 ```
 
+## Standard Model Representation
+
+### Hierarchical JSON Structure
+
+All models are represented using a standardized hierarchical JSON structure stored in `models/` directory. This structure captures the complete model architecture while distinguishing between basic (computational) and composite (organizational) layers.
+
+**Core Structure:**
+```json
+{
+  "model_id": "model-name",
+  "layers": [
+    {
+      "name": "layer_name",
+      "class": "full.class.path.ClassName",
+      "repeat": 32,                    // Optional: only if > 1
+      "sub_layers": [...]              // Optional: only for composite layers
+    }
+  ]
+}
+```
+
+### Basic vs Composite Layers
+
+**Basic Layers (Computational):**
+- Layers WITHOUT `sub_layers` field
+- Perform actual computation (Linear, Embedding, Activation, Normalization)
+- These are the layers for which we calculate FLOPs/memory
+- Examples: `torch.nn.modules.linear.Linear`, `torch.nn.modules.activation.SiLU`
+
+**Composite Layers (Organizational):**
+- Layers WITH `sub_layers` field
+- Container/organizational layers that group other layers
+- Do not perform direct computation
+- Examples: `LlamaDecoderLayer`, `LlamaSdpaAttention`, `LlamaMLP`
+
+### Example: Llama-2-7b-hf Structure
+
+```json
+{
+  "model_id": "meta-llama/Llama-2-7b-hf",
+  "layers": [
+    {
+      "name": "model",
+      "class": "transformers.models.llama.modeling_llama.LlamaModel",
+      "sub_layers": [
+        {
+          "name": "embed_tokens",                           // BASIC LAYER
+          "class": "torch.nn.modules.sparse.Embedding"
+        },
+        {
+          "name": "decoder_layer",                          // COMPOSITE LAYER
+          "class": "transformers.models.llama.modeling_llama.LlamaDecoderLayer",
+          "repeat": 32,
+          "sub_layers": [
+            {
+              "name": "self_attn",                          // COMPOSITE LAYER
+              "class": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+              "sub_layers": [
+                {
+                  "name": "q_proj",                         // BASIC LAYER
+                  "class": "torch.nn.modules.linear.Linear"
+                },
+                {
+                  "name": "k_proj",                         // BASIC LAYER
+                  "class": "torch.nn.modules.linear.Linear"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "lm_head",                                    // BASIC LAYER
+      "class": "torch.nn.modules.linear.Linear"
+    }
+  ]
+}
+```
+
+### Layer Identification Rules
+
+**Basic Layer Identification:**
+```python
+def is_basic_layer(layer_dict):
+    return "sub_layers" not in layer_dict
+```
+
+**Total Basic Layer Count (Llama-2-7b-hf):**
+- **Linear layers**: 129 (4 per attention × 32 + 3 per MLP × 32 + 1 lm_head)
+- **Embedding layers**: 1 (embed_tokens)
+- **Normalization layers**: 65 (2 per decoder × 32 + 1 final norm)
+- **Activation layers**: 32 (1 SiLU per MLP)
+- **Rotary embedding layers**: 33 (1 per attention + 1 at model level)
+
+### Usage in Analysis Pipeline
+
+The analysis system uses this structure to:
+1. **Extract Basic Layers**: Traverse hierarchy to find layers without `sub_layers`
+2. **Apply Repetition**: Multiply calculations by `repeat` count when present
+3. **Calculate FLOPs/Memory**: Only for basic layers, not composite layers
+4. **Generate Reports**: Aggregate results across all basic layers
+
 ### 1. Module Analysis Database
 A JSON database storing computational characteristics for each PyTorch module type.
 
@@ -112,6 +215,9 @@ LM-Predictor/
 ├── module_analyzer.py       # Cache-first module analysis with Claude Code agent fallback
 ├── module_generator_agent.py # Claude Code agent for generating module files
 ├── module_db.json          # Module analysis database (formula templates only)
+├── models/                 # Standard model architecture representations
+│   ├── llama-2-7b-hf.json # Llama-2-7b-hf hierarchical structure
+│   └── ...                # Other model architectures
 ├── generated_modules/       # Generated Python modules (flat structure)
 │   ├── __init__.py         # Registry and convenience functions
 │   ├── registry.py         # ModuleRegistry with auto-discovery
