@@ -167,6 +167,26 @@ A JSON database storing computational characteristics for each PyTorch module ty
 - Handle path-to-name conversion: `torch.nn.Linear` → `torch_Linear` (database key)
 - Provide user-friendly interface: `compute_flops("torch.nn.Linear", ...)`
 
+**Recommended Usage Pattern (Global Convenience Functions):**
+```python
+from generated_modules.registry import get_required_parameters, compute_flops, compute_memory
+
+# Get required parameters using PyTorch class name
+required_params = get_required_parameters('torch.nn.modules.linear.Linear')
+# Returns: {'N': 'int', 'in_features': 'int', 'out_features': 'int', 'dtype_bytes': 'int'}
+
+# Compute FLOPs and memory using the same module name
+params = {'N': 10, 'in_features': 512, 'out_features': 256, 'dtype_bytes': 4}
+flops = compute_flops('torch.nn.modules.linear.Linear', **params)
+memory = compute_memory('torch.nn.modules.linear.Linear', **params)
+```
+
+This is the preferred method as it:
+- Uses intuitive PyTorch class names directly
+- Provides a clean, consistent API across all operations
+- Requires minimal imports
+- Handles module discovery automatically
+
 #### E. Generated Modules (`generated_modules/`)
 - Python classes auto-generated from JSON formula templates
 - Flat directory structure with descriptive class names prevents conflicts

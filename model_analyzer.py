@@ -7,36 +7,36 @@ Replaces legacy hardcoded approach with composable analysis system.
 import os
 import json
 import argparse
+import re
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
 from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForCausalLM, AutoConfig
 
-from module_analyzer import ModuleAnalyzer as ModuleDB
-from module_analyzer_agent import ModuleAnalyzerAgent
-
 load_dotenv()
-
-
-@dataclass
-class AnalysisParams:
-    """Parameters for model analysis."""
-    batch_size: int
-    seq_len: int
-    dtype_bytes: int = 2  # FP16 default
 
 
 class ModelAnalyzer:
     """Modular model analyzer using meta device and module database."""
 
-    def __init__(self, model_id: str):
-        """Initialize analyzer with model ID."""
+    def __init__(self, model_id: str = None, model_json_path: str = None):
+        """Initialize analyzer with model ID and/or model JSON path."""
         self.model_id = model_id
-        self.module_analyzer = ModuleDB()
-        self.agent = ModuleAnalyzerAgent()
+        self.model_json_path = model_json_path
         self.model = None
         self.config = None
+
+        # If model_json_path is provided, extract model_id from JSON for display
+        if model_json_path:
+            try:
+                with open(model_json_path, 'r') as f:
+                    model_structure = json.load(f)
+                if not model_id:  # Only override if model_id not explicitly provided
+                    self.model_id = model_structure.get("model_id", "unknown")
+            except Exception as e:
+                print(f"Warning: Could not extract model_id from JSON: {e}")
+                if not model_id:
+                    self.model_id = "unknown"
 
     def load_model_architecture(self) -> None:
         """Load model architecture on meta device without weights."""
@@ -56,25 +56,11 @@ class ModelAnalyzer:
 
         print(f"✓ Loaded {self.model.__class__.__name__} architecture")
 
-    def inspect_model_structure(self) -> Dict[str, Any]:
-        """Inspect model structure using simple module representation."""
-        if self.model is None:
-            self.load_model_architecture()
-
-        def module_to_dict(module):
-            children = dict(module.named_children())
-            if not children:  # leaf node
-                return self.module_repr(module)
-            return {name: module_to_dict(child) for name, child in children.items()}
-
-        return module_to_dict(self.model)
-
-    def module_repr(self, module) -> Dict[str, Any]:
-        """Simple module representation for leaf nodes."""
-        return {
-            "class_name": f"{module.__class__.__module__}.{module.__class__.__name__}",
-            "repr": str(module)
-        }
+        # Print model configuration and structure
+        print(f"\nModel Configuration:")
+        print(self.config)
+        print(f"\nModel Structure:")
+        self.print_enhanced_model()
 
     def collect_module_classes(self, module, classes=None):
         """Collect all unique module classes in the model."""
@@ -106,7 +92,6 @@ class ModelAnalyzer:
 
         # Replace each simple class name with full class name
         # Use word boundary replacement to avoid partial matches
-        import re
         enhanced_str = model_str
         for simple_name, full_name in sorted_mappings:
             # Use regex with word boundary to ensure exact class name matches
@@ -116,52 +101,79 @@ class ModelAnalyzer:
 
         print(enhanced_str)
 
+    def _extract_basic_layers_from_json(self, layers, parent_path="", repeat_multiplier=1):
+        """Extract all basic layers from JSON structure with repeat handling."""
+        basic_layers = []
 
-    def analyze_module(self, module_info: Dict[str, Any], params: AnalysisParams) -> Dict[str, Any]:
-        """Analyze a single module using database/agent."""
-        full_class_name = module_info["full_class_name"]
-        module_params = module_info["parameters"]
+        for layer in layers:
+            current_repeat = repeat_multiplier * layer.get("repeat", 1)
+            current_path = f"{parent_path}.{layer['name']}" if parent_path else layer['name']
 
-        # Prepare analysis parameters
-        analysis_params = {
-            "B": params.batch_size,
-            "S": params.seq_len,
-            "dtype_bytes": params.dtype_bytes,
-            **module_params
-        }
+            if "sub_layers" not in layer:  # This is a basic layer
+                basic_layers.append({
+                    "name": layer["name"],
+                    "class": layer["class"],
+                    "parameters": layer.get("parameters", {}),
+                    "path": current_path,
+                    "repeat": current_repeat
+                })
+            else:  # Composite layer - recurse into sub_layers
+                basic_layers.extend(
+                    self._extract_basic_layers_from_json(
+                        layer["sub_layers"], current_path, current_repeat
+                    )
+                )
 
+        return basic_layers
+
+    def _analyze_basic_layer(self, layer_info, batch_size, seq_len, dtype_bytes):
+        """Analyze a single basic layer using registry."""
+        from generated_modules.registry import compute_flops, compute_memory
+
+        # Substitute dynamic parameters in layer parameters
+        resolved_params = {}
+        for param_name, param_value in layer_info["parameters"].items():
+            if isinstance(param_value, str) and "{" in param_value:
+                # Replace placeholders with actual values
+                param_str = param_value
+                param_str = param_str.replace("{batch_size}", str(batch_size))
+                param_str = param_str.replace("{seq_len}", str(seq_len))
+                param_str = param_str.replace("{dtype_bytes}", str(dtype_bytes))
+                param_str = param_str.replace("{index_dtype_bytes}", "4")
+                resolved_params[param_name] = eval(param_str)  # Safe for arithmetic expressions
+            else:
+                resolved_params[param_name] = param_value
+
+        # Compute using registry with full class name (DESIGN.md recommended pattern)
         try:
-            # Try module database first (cache-first approach)
-            results = self.module_analyzer.analyze_module(full_class_name, analysis_params)
+            flops = compute_flops(layer_info["class"], **resolved_params)
+            memory = compute_memory(layer_info["class"], **resolved_params)
 
-            if results is None:
-                print(f"  Module {full_class_name} not in database, using agent...")
-                # Use agent for unknown modules
-                agent_results = self.agent.analyze_module_with_agent(full_class_name)
-
-                # Store in database for future use
-                self.module_analyzer.store_module_analysis(full_class_name, agent_results)
-
-                # Compute with parameters
-                results = self.module_analyzer.analyze_module(full_class_name, analysis_params)
+            # Apply repeat multiplier
+            total_flops = flops * layer_info["repeat"]
+            total_memory_reads = memory["reads"] * layer_info["repeat"]
+            total_memory_writes = memory["writes"] * layer_info["repeat"]
+            total_memory_intermediates = memory["intermediates"] * layer_info["repeat"]
 
             return {
-                "module_path": module_info["path"],
-                "class_name": module_info["class_name"],
-                "full_class_name": full_class_name,
-                "flops": results["flops"] if results else 0,
-                "memory_reads": results["memory"]["reads"] if results else 0,
-                "memory_writes": results["memory"]["writes"] if results else 0,
-                "memory_intermediates": results["memory"]["intermediates"] if results else 0,
-                "parameters_used": analysis_params
+                "layer_path": layer_info["path"],
+                "layer_name": layer_info["name"],
+                "class": layer_info["class"],
+                "repeat_count": layer_info["repeat"],
+                "flops": total_flops,
+                "memory_reads": total_memory_reads,
+                "memory_writes": total_memory_writes,
+                "memory_intermediates": total_memory_intermediates,
+                "parameters": resolved_params
             }
 
         except Exception as e:
-            print(f"  ⚠ Failed to analyze {full_class_name}: {e}")
+            print(f"  ⚠ Failed to analyze {layer_info['class']}: {e}")
             return {
-                "module_path": module_info["path"],
-                "class_name": module_info["class_name"],
-                "full_class_name": full_class_name,
+                "layer_path": layer_info["path"],
+                "layer_name": layer_info["name"],
+                "class": layer_info["class"],
+                "repeat_count": layer_info["repeat"],
                 "flops": 0,
                 "memory_reads": 0,
                 "memory_writes": 0,
@@ -169,50 +181,17 @@ class ModelAnalyzer:
                 "error": str(e)
             }
 
-    def analyze_model_recursive(self, module_info: Dict[str, Any], params: AnalysisParams,
-                               results: List[Dict[str, Any]]) -> None:
-        """Recursively analyze model structure."""
-        # Analyze current module if it's a leaf or known composite module
-        if not module_info["children"] or self._is_analyzable_module(module_info):
-            analysis = self.analyze_module(module_info, params)
-            results.append(analysis)
-            print(f"  ✓ {analysis['module_path']}: {analysis['flops']:,} FLOPs")
-
-        # Recurse into children for non-analyzable modules
-        if module_info["children"] and not self._is_analyzable_module(module_info):
-            for _, child_info in module_info["children"].items():
-                self.analyze_model_recursive(child_info, params, results)
-
-    def _is_analyzable_module(self, module_info: Dict[str, Any]) -> bool:
-        """Check if module should be analyzed as a unit vs decomposed."""
-        class_name = module_info["class_name"]
-
-        # Always analyze these as atomic units
-        atomic_modules = {
-            "Linear", "Conv1d", "Conv2d", "LayerNorm", "RMSNorm",
-            "MultiheadAttention", "Embedding"
-        }
-
-        # LLM-specific modules that should be analyzed as units
-        llm_modules = {
-            "LlamaAttention", "LlamaMLP", "LlamaDecoderLayer",
-            "GPTAttention", "GPTMLP", "GPTBlock",
-            "BertAttention", "BertMLP", "BertLayer"
-        }
-
-        return class_name in atomic_modules or class_name in llm_modules
-
     def analyze(self, seqlen: int, batchsize: int, w_bit: int = 16, a_bit: int = 16,
                 kv_bit: Optional[int] = None, **_) -> Dict[str, Any]:
         """
-        Main analysis method for compatibility with legacy interface.
+        Analyze model using JSON structure for layer-by-layer computation.
 
         Args:
             seqlen: sequence length
             batchsize: batch size
             w_bit: weight bit width (for dtype_bytes calculation)
             a_bit: activation bit width (for dtype_bytes calculation)
-            kv_bit: key-value cache bit width (unused in new approach)
+            kv_bit: unused (legacy compatibility)
             **kwargs: other legacy parameters (ignored)
 
         Returns:
@@ -221,32 +200,41 @@ class ModelAnalyzer:
         print(f"\n=== Analyzing {self.model_id} ===")
         print(f"Parameters: B={batchsize}, S={seqlen}, w_bit={w_bit}, a_bit={a_bit}")
 
-        # Calculate dtype bytes from bit width (kv_bit unused in new approach)
-        if kv_bit is None:
-            kv_bit = a_bit
+        # Load JSON model structure
+        if not self.model_json_path:
+            raise ValueError("No model JSON path provided for analysis")
+
+        try:
+            with open(self.model_json_path, 'r') as f:
+                model_structure = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Model JSON not found: {self.model_json_path}")
+
+        # Extract all basic layers from JSON
+        basic_layers = self._extract_basic_layers_from_json(model_structure["layers"])
+
+        print(f"\nAnalyzing {len(basic_layers)} basic layers:")
+
+        # Analyze each basic layer
         dtype_bytes = a_bit // 8
-
-        # Load architecture if needed
-        if self.model is None:
-            self.load_model_architecture()
-
-        # Get model structure
-        structure = self.inspect_model_structure()
-
-        # Analyze recursively
-        params = AnalysisParams(batchsize, seqlen, dtype_bytes)
         results = []
 
-        print(f"\nAnalyzing modules:")
-        self.analyze_model_recursive(structure, params, results)
+        for layer_info in basic_layers:
+            analysis = self._analyze_basic_layer(layer_info, batchsize, seqlen, dtype_bytes)
+            results.append(analysis)
 
-        # Convert to legacy format for compatibility
+            # Print progress (only for layers with FLOPs)
+            if analysis["flops"] > 0:
+                repeat_str = f" (×{analysis['repeat_count']})" if analysis['repeat_count'] > 1 else ""
+                print(f"  ✓ {analysis['layer_path']}{repeat_str}: {analysis['flops']:,} FLOPs")
+
+        # Calculate totals
         total_flops = sum(r["flops"] for r in results)
         total_memory_reads = sum(r["memory_reads"] for r in results)
         total_memory_writes = sum(r["memory_writes"] for r in results)
         total_memory_intermediates = sum(r["memory_intermediates"] for r in results)
 
-        # Legacy format - single stage results
+        # Return legacy format for compatibility
         legacy_results = {
             "decode": {},
             "prefill": {},
@@ -255,32 +243,32 @@ class ModelAnalyzer:
                     "OPs": total_flops,
                     "memory_access": total_memory_reads + total_memory_writes + total_memory_intermediates,
                     "load_weight": total_memory_reads,
-                    "load_act": 0,  # Simplified
+                    "load_act": 0,
                     "store_act": total_memory_writes,
-                    "load_kv_cache": 0,  # Simplified
-                    "store_kv_cache": 0,  # Simplified
-                    "inference_time": total_flops / 1e12  # Simplified estimate
+                    "load_kv_cache": 0,
+                    "store_kv_cache": 0,
+                    "inference_time": total_flops / 1e12
                 },
                 "prefill": {
                     "OPs": total_flops,
                     "memory_access": total_memory_reads + total_memory_writes + total_memory_intermediates,
                     "load_weight": total_memory_reads,
-                    "load_act": 0,  # Simplified
+                    "load_act": 0,
                     "store_act": total_memory_writes,
-                    "load_kv_cache": 0,  # Simplified
-                    "store_kv_cache": 0,  # Simplified
-                    "inference_time": total_flops / 1e12  # Simplified estimate
+                    "load_kv_cache": 0,
+                    "store_kv_cache": 0,
+                    "inference_time": total_flops / 1e12
                 }
             },
-            "modular_results": {
-                "module_analyses": results,
+            "json_based_results": {
+                "basic_layer_analyses": results,
                 "totals": {
                     "flops": total_flops,
                     "memory_reads": total_memory_reads,
                     "memory_writes": total_memory_writes,
                     "memory_intermediates": total_memory_intermediates
                 },
-                "model_structure": structure
+                "model_json_used": self.model_json_path
             }
         }
 
@@ -297,40 +285,32 @@ def main():
     """Command-line interface for model analysis."""
     parser = argparse.ArgumentParser(description='Analyze LLM model FLOPs and memory using modular approach')
     parser.add_argument('--model_id', type=str, default="meta-llama/Llama-2-7b-hf",
-                       help='Model ID to analyze (default: meta-llama/Llama-2-7b-hf)')
+                       help='Model ID for inspection (default: meta-llama/Llama-2-7b-hf)')
+    parser.add_argument('--model_json', type=str, default=None,
+                       help='Path to model JSON file (required for --analyze)')
+    parser.add_argument('--analyze', action='store_true',
+                       help='Run FLOPs/memory analysis (requires --model_json)')
     parser.add_argument('--batch_size', type=int, default=1,
                        help='Batch size (default: 1)')
     parser.add_argument('--seq_len', type=int, default=2048,
                        help='Sequence length (default: 2048)')
-    parser.add_argument('--analyze', action='store_true',
-                       help='Run analysis (default: True, kept for compatibility)')
     parser.add_argument('--w_bit', type=int, default=16,
                        help='Weight bit width (default: 16)')
     parser.add_argument('--a_bit', type=int, default=16,
                        help='Activation bit width (default: 16)')
     parser.add_argument('--output', '-o', type=str, default=None,
                        help='Output file path (default: auto-generated)')
-    parser.add_argument('--inspect_only', action='store_true',
-                       help='Only inspect model structure without analysis')
-    parser.add_argument('--unique_modules', action='store_true',
-                       help='Output unique module classes found in the model')
 
     args = parser.parse_args()
 
     try:
-        analyzer = ModelAnalyzer(args.model_id)
+        if args.analyze:
+            # Analysis mode requires model_json
+            if not args.model_json:
+                print("Error: --analyze requires --model_json")
+                return 1
 
-        if args.inspect_only:
-            analyzer.load_model_architecture()
-            analyzer.print_enhanced_model()
-            # structure = analyzer.inspect_model_structure()
-            # print(json.dumps(structure, indent=2))
-        elif args.unique_modules:
-            analyzer.load_model_architecture()
-            unique_modules = analyzer.collect_module_classes(analyzer.model)
-            for full_name in sorted(set(unique_modules.values())):
-                print(full_name)
-        else:
+            analyzer = ModelAnalyzer(model_id=args.model_id, model_json_path=args.model_json)
             results = analyzer.analyze(
                 seqlen=args.seq_len,
                 batchsize=args.batch_size,
@@ -342,6 +322,10 @@ def main():
                 with open(args.output, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 print(f"Analysis saved to: {args.output}")
+        else:
+            # Default: Inspection mode using model_id
+            analyzer = ModelAnalyzer(model_id=args.model_id)
+            analyzer.load_model_architecture()
 
     except Exception as e:
         print(f"Error: {e}")

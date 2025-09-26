@@ -45,7 +45,6 @@ class ModuleRegistry:
                 "torch_Embedding": ("torch_embedding", "TorchEmbedding"),
                 "transformers_LlamaDecoderLayer": ("transformers_llama_decoder_layer", "TransformersLlamaDecoderLayer"),
                 "transformers_LlamaForCausalLM": ("transformers_llama_for_causal_lm", "TransformersLlamaForCausalLM"),
-                "transformers_LlamaModel": ("transformers_llama_model", "TransformersLlamaModel"),
                 "transformers_LlamaRMSNorm": ("transformers_llama_rms_norm", "TransformersLlamaRMSNorm"),
                 "transformers_LlamaRotaryEmbedding": ("transformers_llama_rotary_embedding", "TransformersLlamaRotaryEmbedding"),
                 "transformers_LlamaSdpaAttention": ("transformers_llama_sdpa_attention", "TransformersLlamaSdpaAttention"),
@@ -105,6 +104,15 @@ class ModuleRegistry:
             "intermediates": instance.compute_intermediates(**params)
         }
 
+    def get_required_parameters(self, module_name: str) -> Dict[str, str]:
+        """Convenience method to get required parameters for a module."""
+        module_class = self.get_module(module_name)
+        if not module_class:
+            raise ValueError(f"Module not found: {module_name}")
+
+        instance = module_class()
+        return instance.get_required_parameters()
+
 
 # Global registry instance
 _registry = None
@@ -126,3 +134,8 @@ def compute_flops(module_name: str, **params: Dict[str, Any]) -> int:
 def compute_memory(module_name: str, **params: Dict[str, Any]) -> Dict[str, int]:
     """Convenience function to compute memory usage."""
     return get_registry().compute_memory(module_name, **params)
+
+
+def get_required_parameters(module_name: str) -> Dict[str, str]:
+    """Convenience function to get required parameters."""
+    return get_registry().get_required_parameters(module_name)
