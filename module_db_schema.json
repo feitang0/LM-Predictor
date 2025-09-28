@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "PyTorch Module Analysis Schema",
-  "description": "JSON Schema for storing PyTorch module FLOP and memory analysis functions",
+  "description": "JSON Schema for storing PyTorch module FLOP and memory analysis functions. Uses ${Module}() for module references and {param} for parameters.",
   "type": "object",
   "properties": {
     "full_class_name": {
@@ -64,7 +64,7 @@
         },
         "calculation_formula": {
           "type": "string",
-          "description": "Calculation formula using ${param} and {Module}() syntax"
+          "description": "Calculation formula using {param} for parameters and ${Module}() for module references"
         },
         "module_depends": {
           "type": "array",
@@ -118,15 +118,15 @@
         },
         "reads_calculation_formula": {
           "type": "string",
-          "description": "Calculation formula for memory reads using ${param} and {Module}() syntax"
+          "description": "Calculation formula for memory reads using {param} for parameters and ${Module}() for module references"
         },
         "writes_calculation_formula": {
           "type": "string",
-          "description": "Calculation formula for memory writes using ${param} and {Module}() syntax"
+          "description": "Calculation formula for memory writes using {param} for parameters and ${Module}() for module references"
         },
         "intermediates_calculation_formula": {
           "type": "string",
-          "description": "Calculation formula for intermediate memory using ${param} and {Module}() syntax"
+          "description": "Calculation formula for intermediate memory using {param} for parameters and ${Module}() for module references"
         },
         "module_depends": {
           "type": "array",

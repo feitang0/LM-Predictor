@@ -14,10 +14,10 @@
         {"name": "input_features", "type": "int", "description": "input feature dimension"},
         {"name": "output_features", "type": "int", "description": "output feature dimension"}
       ],
-      "calculation_formula": "2 * ${B} * ${S} * ${input_features} * ${output_features}",
+      "calculation_formula": "2 * {B} * {S} * {input_features} * {output_features}",
       "module_depends": [],
       "breakdown": {
-        "matrix_multiply": "2 * ${B} * ${S} * ${input_features} * ${output_features}"
+        "matrix_multiply": "2 * {B} * {S} * {input_features} * {output_features}"
       }
     },
     "memory_analysis": {
@@ -29,8 +29,8 @@
         {"name": "output_features", "type": "int", "description": "output feature dimension"},
         {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
       ],
-      "reads_calculation_formula": "${input_features} * ${output_features} * ${dtype_bytes} + ${B} * ${S} * ${input_features} * ${dtype_bytes}",
-      "writes_calculation_formula": "${B} * ${S} * ${output_features} * ${dtype_bytes}",
+      "reads_calculation_formula": "{input_features} * {output_features} * {dtype_bytes} + {B} * {S} * {input_features} * {dtype_bytes}",
+      "writes_calculation_formula": "{B} * {S} * {output_features} * {dtype_bytes}",
       "intermediates_calculation_formula": "0",
       "module_depends": []
     },
@@ -53,14 +53,14 @@
         {"name": "hidden_size", "type": "int", "description": "model hidden dimension"},
         {"name": "num_heads", "type": "int", "description": "number of attention heads"}
       ],
-      "calculation_formula": "3 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size}) + 2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads}) + {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
+      "calculation_formula": "3 * ${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size}) + 2 * {B} * {num_heads} * {S} * {S} * ({hidden_size} // {num_heads}) + ${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})",
       "module_depends": ["torch.nn.Linear"],
       "breakdown": {
-        "q_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "k_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "v_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})",
-        "attention_scores": "2 * ${B} * ${num_heads} * ${S} * ${S} * (${hidden_size} // ${num_heads})",
-        "o_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${hidden_size})"
+        "q_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})",
+        "k_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})",
+        "v_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})",
+        "attention_scores": "2 * {B} * {num_heads} * {S} * {S} * ({hidden_size} // {num_heads})",
+        "o_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})"
       }
     },
     "memory_analysis": {
@@ -72,9 +72,9 @@
         {"name": "num_heads", "type": "int", "description": "number of attention heads"},
         {"name": "dtype_bytes", "type": "int", "description": "bytes per data type element"}
       ],
-      "reads_calculation_formula": "4 * ${hidden_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
-      "intermediates_calculation_formula": "${B} * ${num_heads} * ${S} * ${S} * ${dtype_bytes}",
+      "reads_calculation_formula": "4 * {hidden_size} * {hidden_size} * {dtype_bytes} + {B} * {S} * {hidden_size} * {dtype_bytes}",
+      "writes_calculation_formula": "{B} * {S} * {hidden_size} * {dtype_bytes}",
+      "intermediates_calculation_formula": "{B} * {num_heads} * {S} * {S} * {dtype_bytes}",
       "module_depends": []
     },
     "validation": {
