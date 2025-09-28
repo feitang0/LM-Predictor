@@ -7,6 +7,7 @@ import json
 import os
 from typing import Dict, Any, Optional
 from module_analyzer_agent import ModuleAnalyzerAgent
+from module_generator_agent import ModuleGeneratorAgent
 
 
 def extract_library_and_class(full_class_name: str) -> tuple[str, str]:
@@ -112,27 +113,83 @@ class ModuleAnalyzer:
 
         return None
 
-    def analyze_module(self, module_spec: str) -> Dict[str, Any]:
+    def analyze_module(self, module_spec: str, force: bool = False, generate: bool = False) -> Dict[str, Any]:
         """Analyze module (cache-first)."""
         print(f"Analyzing {module_spec}...")
 
-        # Check cache first
-        cached = self.get_cached(module_spec)
-        if cached:
-            print(f"✓ Found in cache")
-            return cached
+        # Check cache first (unless force is True)
+        if not force:
+            cached = self.get_cached(module_spec)
+            if cached:
+                print(f"✓ Found in cache")
+
+                # Generate module if requested (even from cache)
+                if generate:
+                    # IMPORTANT: Use full_class_name from cached result, not module_spec
+                    full_class_name = cached.get("full_class_name")
+                    if full_class_name:
+                        print(f"🔧 Generating Python module for: {full_class_name}")
+                        try:
+                            generator = ModuleGeneratorAgent()
+                            gen_result = generator.generate_module_with_agent(full_class_name)
+
+                            if gen_result["status"] == "success":
+                                print(f"✓ Generated module file: {gen_result['module_file']}")
+                                print(f"  Class name: {gen_result['class_name']}")
+                            else:
+                                print(f"⚠ Generation failed: {gen_result.get('error', 'Unknown error')}")
+                        except Exception as e:
+                            print(f"⚠ Generation error: {e}")
+                    else:
+                        print("⚠ Cannot generate: missing full_class_name in cached result")
+
+                return cached
+        else:
+            print(f"⚡ Force flag set, skipping cache...")
+            # Check if module exists in cache for informational purposes
+            cached = self.get_cached(module_spec)
+            if cached:
+                print(f"ℹ Module exists in cache but will be overwritten")
 
         # Use agent
-        print(f"⚡ Not cached, using agent...")
+        if force:
+            print(f"⚡ Using agent for forced re-analysis...")
+        else:
+            print(f"⚡ Not cached, using agent...")
         result = self.agent.analyze_module_with_agent(module_spec)
 
         # Cache result using standardized key
         db = self._load_db()
         key = self._module_to_key(result)
+        is_update = key in db["modules"]
         db["modules"][key] = result
         self._save_db(db)
 
-        print(f"✓ Cached as {key}")
+        if is_update:
+            print(f"✓ Updated cache entry: {key}")
+        else:
+            print(f"✓ Cached as {key}")
+
+        # Generate module if requested
+        if generate:
+            # IMPORTANT: Use full_class_name from result, not module_spec
+            full_class_name = result.get("full_class_name")
+            if full_class_name:
+                print(f"🔧 Generating Python module for: {full_class_name}")
+                try:
+                    generator = ModuleGeneratorAgent()
+                    gen_result = generator.generate_module_with_agent(full_class_name)
+
+                    if gen_result["status"] == "success":
+                        print(f"✓ Generated module file: {gen_result['module_file']}")
+                        print(f"  Class name: {gen_result['class_name']}")
+                    else:
+                        print(f"⚠ Generation failed: {gen_result.get('error', 'Unknown error')}")
+                except Exception as e:
+                    print(f"⚠ Generation error: {e}")
+            else:
+                print("⚠ Cannot generate: missing full_class_name in analysis result")
+
         return result
 
 
@@ -152,13 +209,23 @@ def main():
         default="module_db.json",
         help="Path to module database file (default: module_db.json)"
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-analysis even if module is already cached"
+    )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help="Automatically generate Python module file after analysis"
+    )
 
     args = parser.parse_args()
 
     analyzer = ModuleAnalyzer(db_path=args.db_path)
 
     try:
-        result = analyzer.analyze_module(args.module_spec)
+        result = analyzer.analyze_module(args.module_spec, force=args.force, generate=args.generate)
         print(json.dumps(result, indent=2))
     except Exception as e:
         print(f"Error: {e}")
