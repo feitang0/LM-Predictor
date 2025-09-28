@@ -142,7 +142,7 @@ flops = compute_flops('torch.nn.modules.linear.Linear', **params)
 <critical_notes>
 ## CRITICAL NOTES
 
-- **Always plan thoroughly before coding** - Complex system with multiple interdependencies
+- **Add `ultrathink` before the prompt of each purposed planed steps when claude are in plan mode** - To trigger ultrathink for each planed steps
 - **Use `uv add <package>` to add dependencies** - Consistent package management
 - **Use `uv run python script.py` to run Python scripts** - Proper virtual environment
 - **NEVER use `any` types** - Type safety is mandatory throughout system
