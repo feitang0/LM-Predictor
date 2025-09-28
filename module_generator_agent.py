@@ -79,6 +79,10 @@ class ModuleGeneratorAgent:
             if os.path.exists("generation_result.json"):
                 os.remove("generation_result.json")
 
+            # Remove diagnostic file if it exists
+            if os.path.exists("generation_result_diagnostics.json"):
+                os.remove("generation_result_diagnostics.json")
+
             # Prepare environment (current env + any from .env file)
             env = os.environ.copy()
 
@@ -105,6 +109,13 @@ class ModuleGeneratorAgent:
 
             with open("generation_result.json", 'r') as f:
                 generation_result = json.load(f)
+
+            # Read diagnostic information (for debugging purposes only)
+            diagnostic_file = "generation_result_diagnostics.json"
+            if os.path.exists(diagnostic_file):
+                with open(diagnostic_file, 'r') as f:
+                    diagnostics = json.load(f)
+                # Note: diagnostics are kept separate and not added to generation_result
 
             return generation_result
 
@@ -137,32 +148,47 @@ Module Data:
 IMPORTANT:
 1. Follow the naming conventions from updated DESIGN.md exactly
 2. Generate real executable Python code, NOT template formulas
-3. Your final step must be to write the generation result to generation_result.json
+3. Use new syntax: ${{}} for modules, {{}} for parameters
+4. Write generation result to generation_result.json (NOT as final step)
+5. **FINAL STEP**: Write diagnostic information to generation_result_diagnostics.json
 
 TODO List:
 
-1. **Process Data**: Examine the provided module analysis data for {full_class_name}
+ultrathink 1. **Process Data**: Examine the provided module analysis data for {full_class_name}
 
-2. **Determine Paths**: Convert full_class_name to required paths (flat structure):
+ultrathink 2. **Determine Paths**: Convert full_class_name to required paths (flat structure):
    - For torch.nn.Linear: class_name="TorchLinear", file_name="torch_linear.py"
    - For transformers.models.llama.modeling_llama.LlamaMLP: class_name="TransformersLlamaMLP", file_name="transformers_llama_mlp.py"
 
-3. **Generate Module File**: Create Python class following BaseModule pattern:
+ultrathink 3. **Generate Module File**: Create Python class following BaseModule pattern:
    - Import BaseModule from .base (since we're in flat structure)
    - Import any required module classes (e.g., from .torch_linear import TorchLinear)
    - Implement all abstract methods with REAL Python code
    - **CRITICAL**: Convert formulas to executable Python code:
-     - Replace `${{parameter}}` with `params['parameter']`
-     - Replace `{{torch.nn.Linear}}(...)` with actual instantiation: `TorchLinear().compute_flops(...)`
-     - Replace `{{transformers.LlamaMLP}}(...)` with `TransformersLlamaMLP().compute_flops(...)`
+     - Replace `{{parameter}}` with `params['parameter']`
+     - Replace `${{torch.nn.Linear}}(...)` with actual instantiation: `TorchLinear().compute_flops(...)`
+     - Replace `${{transformers.LlamaMLP}}(...)` with `TransformersLlamaMLP().compute_flops(...)`
 
-4. **Write Result**: Create generation_result.json with:
+ultrathink 4. **Write Result**: Create generation_result.json with:
    {{
      "status": "success" | "error",
      "module_file": "path/to/generated/file.py",
      "class_name": "GeneratedClassName",
      "full_class_name": "original.full.class.Name",
      "error": "error message if failed"
+   }}
+
+ultrathink 5. **Write Diagnostics**: Create generation_result_diagnostics.json with:
+   {{
+     "module_generated": "{full_class_name}",
+     "status": "success",
+     "reason": null
+   }}
+   Or if failed:
+   {{
+     "module_generated": "{full_class_name}",
+     "status": "fail",
+     "reason": "Description of what went wrong"
    }}
 
 ## Key Requirements:
@@ -176,7 +202,7 @@ TODO List:
 Transform template formulas into real Python code:
 
 **Example Input Formula:**
-`"2 * {{torch.nn.Linear}}(${{B}} * ${{S}}, ${{hidden_size}}, ${{intermediate_size}}) + 5 * ${{B}} * ${{S}} * ${{intermediate_size}}"`
+`"2 * ${{torch.nn.Linear}}({{B}} * {{S}}, {{hidden_size}}, {{intermediate_size}}) + 5 * {{B}} * {{S}} * {{intermediate_size}}"`
 
 **Example Output Python Code:**
 ```python
@@ -216,7 +242,6 @@ class ClassName(BaseModule):
         # Real Python code with direct method calls
 ```
 
-Your final response must contain ONLY: SUCCESS or FAIL
 """
 
 

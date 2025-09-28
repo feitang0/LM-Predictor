@@ -17,11 +17,12 @@ from jsonschema import validate, ValidationError
 class ModuleAnalyzerAgent:
     """Claude Code agent for analyzing PyTorch module forward functions."""
 
-    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema.json", examples_path: str = "module_db_examples.json"):
+    def __init__(self, claude_command: str = "claude", schema_path: str = "module_db_schema.json", examples_path: str = "module_db_examples.json", output_file: str = "module_analysis.json"):
         """Initialize the agent with Claude Code command."""
         self.claude_command = claude_command
         self.schema_path = schema_path
         self.examples_path = examples_path
+        self.output_file = output_file
 
     def _load_schema(self) -> Dict[str, Any]:
         """Load the module database schema."""
@@ -39,27 +40,34 @@ class ModuleAnalyzerAgent:
         with open(self.examples_path, 'r') as f:
             return json.load(f)
 
-    def analyze_module_with_agent(self, module_spec: str) -> Dict[str, Any]:
+    def analyze_module_with_agent(self, module_spec: str, output_file: Optional[str] = None) -> Dict[str, Any]:
         """
         Use Claude Code to analyze a module's forward function for FLOPs and memory.
 
         Args:
             module_spec: Module specification - can be class name or full path
                         (e.g., 'Linear', 'torch.nn.Linear', 'LlamaAttention')
+            output_file: Override default output file for this analysis
 
         Returns:
             Dictionary with analysis results including thinking process, formulas, and functions
         """
-        prompt = self._create_analysis_prompt(module_spec)
+        analysis_output_file = output_file or self.output_file
+        prompt = self._create_analysis_prompt(module_spec, analysis_output_file)
 
         print("=== PROMPT ===")
         print(prompt)
         print("=== END PROMPT ===")
 
         try:
-            # Remove response.json if it exists
-            if os.path.exists("response.json"):
-                os.remove("response.json")
+            # Remove output file if it exists
+            if os.path.exists(analysis_output_file):
+                os.remove(analysis_output_file)
+
+            # Remove diagnostic file if it exists
+            diagnostic_file = analysis_output_file.replace('.json', '_diagnostics.json')
+            if os.path.exists(diagnostic_file):
+                os.remove(diagnostic_file)
 
             # Prepare environment (current env + any from .env file)
             env = os.environ.copy()
@@ -81,12 +89,19 @@ class ModuleAnalyzerAgent:
             print(result.stdout)
             print("=== END CLAUDE RESPONSE ===")
 
-            # Read analysis from response.json
-            if not os.path.exists("response.json"):
-                raise FileNotFoundError("Claude did not create response.json file")
+            # Read analysis from output file
+            if not os.path.exists(analysis_output_file):
+                raise FileNotFoundError(f"Claude did not create {analysis_output_file} file")
 
-            with open("response.json", 'r') as f:
+            with open(analysis_output_file, 'r') as f:
                 analysis = json.load(f)
+
+            # Read diagnostic information (for debugging purposes only)
+            diagnostic_file = analysis_output_file.replace('.json', '_diagnostics.json')
+            if os.path.exists(diagnostic_file):
+                with open(diagnostic_file, 'r') as f:
+                    diagnostics = json.load(f)
+                # Note: diagnostics are kept separate and not added to analysis
 
             # Validate the analysis structure
             self._validate_analysis(analysis)
@@ -102,7 +117,7 @@ class ModuleAnalyzerAgent:
         except Exception as e:
             raise RuntimeError(f"Analysis failed for {module_spec}: {e}")
 
-    def _create_analysis_prompt(self, module_spec: str) -> str:
+    def _create_analysis_prompt(self, module_spec: str, output_file: str) -> str:
         """Create the prompt for Claude Code to analyze a module."""
         # Load examples to get template structure
         examples = self._load_examples()
@@ -119,32 +134,51 @@ Available Resources:
 - pytorch/ - PyTorch source code
 - module_db_schema.json - Output schema specification
 
-IMPORTANT:
-1. Your final step must be to write the complete JSON analysis to response.json
-2. Use {{}} to represent a module and ${{}} to represent a parameter
+CRITICAL PRINCIPLES:
+1. Each module counts ONLY operations that occur within its own forward() method
+2. Do NOT count FLOPs that created the input tensors - those belong to other modules
+3. Use ${{}} to represent a module reference and {{}} to represent a parameter
+4. Example: ${{torch.nn.Linear}}({{B}} * {{S}}, {{input_dim}}, {{output_dim}})
 
 TODO List:
 
-1. **Locate Module**: Find {module_spec} in the codebase and read its forward() method
+ultrathink 1. **Locate Module**: Find {module_spec} in the codebase and read its forward() method
 
-2. **Analyze FLOPs**: Break down the forward() operations into:
-   - **Module calls**: Such as {{torch.nn.Linear}}(${{B}} * ${{S}}, ${{input_dim}}, ${{output_dim}})
-   - **Direct calculations**: For all primitive operations (e.g., "4 * ${{B}} * ${{S}} * ${{hidden_size}}" for SiLU, "${{B}} * ${{S}} * ${{hidden_size}}" for element-wise ops, "7 * ${{B}} * ${{S}} * ${{hidden_size}}" for LayerNorm, etc.)
+ultrathink 2. **Determine Operations**: Identify what computations happen WITHIN this module:
+   - **Module calls**: When this module calls other modules (e.g., self.linear(...)), use references like ${{torch.nn.Linear}}({{B}} * {{S}}, {{input_dim}}, {{output_dim}})
+   - **Direct calculations**: Operations performed directly (e.g., element-wise ops, activations, normalizations)
+   - **DO NOT COUNT**: Operations that produced the input tensors
 
-3. **Analyze Memory**: Calculate data movement:
-   - **Reads**: Parameter weights + input activations
-   - **Writes**: Output activations
+ultrathink 3. **Analyze FLOPs**: Count operations following these rules:
+   - For modules that internally call Linear layers: Use ${{torch.nn.Linear}} references
+   - For direct computations: Use explicit formulas like "4 * {{B}} * {{S}} * {{hidden_size}}" for SiLU
+   - Example for attention: Count RoPE application + SDPA operations, but delegate Linear projections
+
+ultrathink 4. **Analyze Memory**: Calculate data movement within this module:
+   - **Reads**: Parameter weights + input activations (what this module reads)
+   - **Writes**: Output activations (what this module produces)
    - **Intermediates**: Temporary tensors created during computation
-   - **Note**: Memory analysis focuses on data flow, not computation - may have empty module_depends
 
-4. **Write Result**: Create complete JSON matching the schema and write to response.json
+ultrathink 5. **Write Analysis**: Create complete JSON matching the schema and write to {output_file}
+
+ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to {output_file.replace('.json', '_diagnostics.json')} with:
+   {{
+     "module_analyzed": "{module_spec}",
+     "status": "success",
+     "reason": null
+   }}
+   Or if failed:
+   {{
+     "module_analyzed": "{module_spec}",
+     "status": "fail",
+     "reason": "Description of what went wrong"
+   }}
 
 ## Example Reference:
 Here's an example of the expected output format:
 
 {example_json}
 
-Your final response must contain ONLY: SUCCESS or FAIL
 """
 
     def _parse_claude_response(self, response_text: str) -> Dict[str, Any]:
@@ -193,11 +227,13 @@ def main():
                        help='Path to module database schema file (default: module_db_schema.json)')
     parser.add_argument('--examples_path', type=str, default='module_db_examples.json',
                        help='Path to module database examples file (default: module_db_examples.json)')
+    parser.add_argument('--output_file', type=str, default='module_analysis.json',
+                       help='Analysis output file (default: module_analysis.json)')
 
     args = parser.parse_args()
 
     try:
-        agent = ModuleAnalyzerAgent(claude_command=args.claude_command, schema_path=args.schema_path, examples_path=args.examples_path)
+        agent = ModuleAnalyzerAgent(claude_command=args.claude_command, schema_path=args.schema_path, examples_path=args.examples_path, output_file=args.output_file)
         analysis = agent.analyze_module_with_agent(args.module)
 
         if args.output:
