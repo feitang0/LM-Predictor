@@ -96,12 +96,12 @@ class ModuleAnalyzerAgent:
             with open(analysis_output_file, 'r') as f:
                 analysis = json.load(f)
 
-            # Read diagnostic information (for debugging purposes only)
+            # Read diagnostic information (for debugging purposes)
             diagnostic_file = analysis_output_file.replace('.json', '_diagnostics.json')
             if os.path.exists(diagnostic_file):
                 with open(diagnostic_file, 'r') as f:
                     diagnostics = json.load(f)
-                # Note: diagnostics are kept separate and not added to analysis
+                print(f"Diagnostics: {diagnostics}")
 
             # Validate the analysis structure
             self._validate_analysis(analysis)
@@ -162,12 +162,12 @@ ultrathink 4. **Analyze Memory**: Calculate data movement within this module:
 ultrathink 5. **Write Analysis**: Create complete JSON matching the schema and write to {output_file}
 
 ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to {output_file.replace('.json', '_diagnostics.json')} with:
+   If successful:
    {{
      "module_analyzed": "{module_spec}",
-     "status": "success",
-     "reason": null
+     "status": "success"
    }}
-   Or if failed:
+   If failed:
    {{
      "module_analyzed": "{module_spec}",
      "status": "fail",

@@ -110,12 +110,12 @@ class ModuleGeneratorAgent:
             with open("generation_result.json", 'r') as f:
                 generation_result = json.load(f)
 
-            # Read diagnostic information (for debugging purposes only)
+            # Read diagnostic information (for debugging purposes)
             diagnostic_file = "generation_result_diagnostics.json"
             if os.path.exists(diagnostic_file):
                 with open(diagnostic_file, 'r') as f:
                     diagnostics = json.load(f)
-                # Note: diagnostics are kept separate and not added to generation_result
+                print(f"Diagnostics: {diagnostics}")
 
             return generation_result
 
@@ -179,12 +179,12 @@ ultrathink 4. **Write Result**: Create generation_result.json with:
    }}
 
 ultrathink 5. **Write Diagnostics**: Create generation_result_diagnostics.json with:
+   If successful:
    {{
      "module_generated": "{full_class_name}",
-     "status": "success",
-     "reason": null
+     "status": "success"
    }}
-   Or if failed:
+   If failed:
    {{
      "module_generated": "{full_class_name}",
      "status": "fail",
