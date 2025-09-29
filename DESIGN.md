@@ -5,19 +5,15 @@ A comprehensive system to analyze FLOPs (Floating Point Operations) and memory r
 
 ## Architecture
 
-**Pipeline:**
+**Pipeline (Two-Step Design):**
 ```
-Model → Analyze Architecture → Recursive Layer-by-Layer Computation → Results
-  ↓              ↓                           ↓                           ↓
-[Input]   Extract Modules           For Each Module:                   Report
-          (layer-by-layer)              ↓
-                                   Known Module?
-                                   ├── Yes: Call generated_modules/ functions
-                                   └── No: Agent Analysis
-                                           ├── Output analyzed JSON
-                                           ├── Store to database
-                                           ├── Generate callable module
-                                           └── Continue computation
+Model Inspection → Architecture JSON → Module Analysis → Parameter Population → Computation
+      ↓                   ↓                    ↓                     ↓                   ↓
+  [Structure]      [No parameters]    [Ensure exist]       [From requirements]    [FLOPs/Memory]
+      ↓                   ↓                    ↓                     ↓
+ module_to_dict()   Pure hierarchy   Check DB/Generate   get_required_parameters()
+      ↓                   ↓                    ↓                     ↓
+  Full structure   Class names only  Agent if missing    populate_from_config()
 ```
 
 ## Standard Model Representation
@@ -132,12 +128,14 @@ A JSON database storing computational characteristics for each PyTorch module ty
 - **Generated Classes**: `LibraryClassName` format (e.g., `TransformersLlamaMLP`, `TorchLinear`)
 
 **Formula Syntax:**
-- **Parameters**: `${param_name}` - represent parameters substituted with actual values
-- **Module Calls**: `{ModuleName}` - represent dependent module names for FLOP and memory calculation
+- **Parameters**: `{param_name}` - represent parameters substituted with actual values
+- **Module Calls**: `${ModuleName}` - represent dependent module names for FLOP and memory calculation
 
 **Schema & Examples:**
-- JSON Schema: See `module_db_schema.json` for the complete specification
-- Example Entries: See `module_db_examples.json` for torch.nn.Linear and LlamaAttention examples
+- Module Database Schema: See `module_db_schema.json` for module computation specification
+- Module Database Examples: See `module_db_examples.json` for torch.nn.Linear and LlamaAttention examples
+- Model Architecture Schema: See `model_representation_schema.json` for architecture representation specification
+- Model Architecture Examples: See `model_representation_examples.json` for Llama-2-7b and other model examples
 
 ### 2. Core Components
 
@@ -153,39 +151,47 @@ A JSON database storing computational characteristics for each PyTorch module ty
 - For known modules: use cached formula templates from database
 - For unknown modules: analyze using Claude Code agent → cache to database
 - Generate safe JSON formula templates (not executable code)
+- **Module requirement validation**: Ensures all modules exist before parameter population
 - Focus on calculation formula generation and database management
 
 #### C. Module Database (`module_db.json`)
-- Store formula templates using `${param}` and `{Module}()` syntax (same for FLOP and memory)
+- Store formula templates using `{param}` and `${Module}()` syntax for FLOP and memory calculations
 - Include thinking process documentation for transparency
 - Track original module paths and code locations
 - Maintain validation status and dependency graphs
+- **Parameter specifications**: Each module entry defines its required parameters via generated classes
 
 #### D. Module Registry (`generated_modules/registry.py`)
 - Auto-discover generated module classes using library namespacing
 - Resolve module dependencies with circular detection
 - Handle path-to-name conversion: `torch.nn.Linear` → `torch_Linear` (database key)
 - Provide user-friendly interface: `compute_flops("torch.nn.Linear", ...)`
+- **Parameter requirement interface**: `get_required_parameters()` for two-step design
 
-**Recommended Usage Pattern (Global Convenience Functions):**
+**Recommended Usage Pattern (Two-Step Design):**
 ```python
 from generated_modules.registry import get_required_parameters, compute_flops, compute_memory
 
-# Get required parameters using PyTorch class name
+# Step 1: Get required parameters from module (single source of truth)
 required_params = get_required_parameters('torch.nn.modules.linear.Linear')
 # Returns: {'N': 'int', 'in_features': 'int', 'out_features': 'int', 'dtype_bytes': 'int'}
 
-# Compute FLOPs and memory using the same module name
-params = {'N': 10, 'in_features': 512, 'out_features': 256, 'dtype_bytes': 4}
+# Step 2: Populate parameters from model config/inspection/defaults
+params = populate_from_config(required_params, model_config, user_inputs)
+# Example result: {'N': 32, 'in_features': 4096, 'out_features': 11008, 'dtype_bytes': 4}
+
+# Step 3: Compute FLOPs and memory with populated parameters
 flops = compute_flops('torch.nn.modules.linear.Linear', **params)
 memory = compute_memory('torch.nn.modules.linear.Linear', **params)
 ```
 
-This is the preferred method as it:
-- Uses intuitive PyTorch class names directly
-- Provides a clean, consistent API across all operations
-- Requires minimal imports
-- Handles module discovery automatically
+This two-step approach provides:
+- **Single source of truth**: Modules define their own parameter requirements
+- **Clean separation**: Structure (architecture JSON) vs computation (parameters)
+- **Automatic validation**: Ensures all required parameters are available
+- **Flexible parameter sources**: Can populate from config, inspection, or user input
+- **Intuitive PyTorch class names**: Direct use without conversion
+- **Consistent API**: Same interface across all operations
 
 #### E. Generated Modules (`generated_modules/`)
 - Python classes auto-generated from JSON formula templates
@@ -227,6 +233,13 @@ class TorchLinear(BaseModule):
         """Calculate intermediate memory using agent-analyzed formula"""
 ```
 
+#### E. Model Architecture Agent (Planned)
+- **Purpose**: Automated generation of architecture JSON from model inspection
+- **Input**: Model inspection output from `module_to_dict()` + model config
+- **Output**: Standardized architecture JSON (structure only, no parameters)
+- **Integration**: Called via `--generate-arch` flag in `model_analyzer.py`
+- **Workflow**: Inspection data → Claude agent analysis → hierarchical JSON → save to `models/`
+
 ## File Structure
 
 ```
@@ -235,9 +248,11 @@ LM-Predictor/
 ├── module_analyzer.py       # Cache-first module analysis with Claude Code agent fallback
 ├── module_generator_agent.py # Claude Code agent for generating module files
 ├── module_db.json          # Module analysis database (formula templates only)
-├── models/                 # Standard model architecture representations
-│   ├── llama-2-7b-hf.json # Llama-2-7b-hf hierarchical structure
-│   └── ...                # Other model architectures
+├── model_representation_schema.json    # JSON schema for model architecture representation
+├── model_representation_examples.json  # Example model architectures following schema
+├── models/                 # Standard model architecture representations (structure only)
+│   ├── llama-2-7b-hf.json # Llama-2-7b-hf hierarchical structure (no parameters)
+│   └── ...                # Other model architectures (all parameter-free)
 ├── generated_modules/       # Generated Python modules (flat structure)
 │   ├── __init__.py         # Registry and convenience functions
 │   ├── registry.py         # ModuleRegistry with auto-discovery

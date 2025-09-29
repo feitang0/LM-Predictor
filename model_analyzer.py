@@ -101,6 +101,31 @@ class ModelAnalyzer:
 
         print(enhanced_str)
 
+    def get_enhanced_model_str(self) -> str:
+        """Get enhanced model structure as string with full class names."""
+        if self.model is None:
+            self.load_model_architecture()
+
+        # Get all module class mappings
+        class_mappings = self.collect_module_classes(self.model)
+
+        # Get original string representation
+        model_str = str(self.model)
+
+        # Sort by length (longest first) to avoid partial replacements
+        sorted_mappings = sorted(class_mappings.items(), key=lambda x: len(x[0]), reverse=True)
+
+        # Replace each simple class name with full class name
+        # Use word boundary replacement to avoid partial matches
+        enhanced_str = model_str
+        for simple_name, full_name in sorted_mappings:
+            # Use regex with word boundary to ensure exact class name matches
+            pattern = r'\b' + re.escape(simple_name) + r'\('
+            replacement = full_name + "("
+            enhanced_str = re.sub(pattern, replacement, enhanced_str)
+
+        return enhanced_str
+
     def _extract_basic_layers_from_json(self, layers, parent_path="", repeat_multiplier=1):
         """Extract all basic layers from JSON structure with repeat handling."""
         basic_layers = []
@@ -300,6 +325,8 @@ def main():
                        help='Activation bit width (default: 16)')
     parser.add_argument('--output', '-o', type=str, default=None,
                        help='Output file path (default: auto-generated)')
+    parser.add_argument('--generate-arch', action='store_true',
+                       help='Generate standardized model architecture JSON during inspection')
 
     args = parser.parse_args()
 
@@ -326,6 +353,27 @@ def main():
             # Default: Inspection mode using model_id
             analyzer = ModelAnalyzer(model_id=args.model_id)
             analyzer.load_model_architecture()
+
+            if args.generate_arch:
+                # Generate architecture using enhanced model string
+                from model_architecture_agent import ModelArchitectureAgent
+
+                # Get enhanced model structure (with full class paths)
+                enhanced_structure = analyzer.get_enhanced_model_str()
+
+                # Use agent to generate architecture
+                agent = ModelArchitectureAgent()
+                architecture = agent.generate_architecture_with_agent(
+                    model_id=args.model_id,
+                    model_structure=enhanced_structure
+                )
+
+                # Save to models/ directory
+                os.makedirs("models", exist_ok=True)
+                output_path = f"models/{args.model_id.replace('/', '-')}.json"
+                with open(output_path, 'w') as f:
+                    json.dump(architecture, f, indent=2)
+                print(f"✓ Architecture saved to {output_path}")
 
     except Exception as e:
         print(f"Error: {e}")

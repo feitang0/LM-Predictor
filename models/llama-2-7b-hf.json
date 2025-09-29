@@ -7,13 +7,7 @@
       "sub_layers": [
         {
           "name": "embed_tokens",
-          "class": "torch.nn.modules.sparse.Embedding",
-          "parameters": {
-            "num_indices": "{batch_size} * {seq_len}",
-            "embedding_dim": 4096,
-            "dtype_bytes": "{dtype_bytes}",
-            "index_dtype_bytes": "{index_dtype_bytes}"
-          }
+          "class": "torch.nn.modules.sparse.Embedding"
         },
         {
           "name": "decoder_layer",
@@ -26,53 +20,23 @@
               "sub_layers": [
                 {
                   "name": "q_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 4096,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "k_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 4096,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "v_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 4096,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "o_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 4096,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "rotary_emb",
-                  "class": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding",
-                  "parameters": {
-                    "B": "{batch_size}",
-                    "S": "{seq_len}",
-                    "head_dim": 128,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding"
                 }
               ]
             },
@@ -82,97 +46,45 @@
               "sub_layers": [
                 {
                   "name": "gate_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 11008,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "up_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 4096,
-                    "out_features": 11008,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "down_proj",
-                  "class": "torch.nn.modules.linear.Linear",
-                  "parameters": {
-                    "N": "{batch_size} * {seq_len}",
-                    "in_features": 11008,
-                    "out_features": 4096,
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.linear.Linear"
                 },
                 {
                   "name": "act_fn",
-                  "class": "torch.nn.modules.activation.SiLU",
-                  "parameters": {
-                    "num_elements": "{batch_size} * {seq_len} * 11008",
-                    "dtype_bytes": "{dtype_bytes}"
-                  }
+                  "class": "torch.nn.modules.activation.SiLU"
                 }
               ]
             },
             {
               "name": "input_layernorm",
-              "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
-              "parameters": {
-                "B": "{batch_size}",
-                "S": "{seq_len}",
-                "hidden_size": 4096,
-                "dtype_bytes": "{dtype_bytes}"
-              }
+              "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm"
             },
             {
               "name": "post_attention_layernorm",
-              "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
-              "parameters": {
-                "B": "{batch_size}",
-                "S": "{seq_len}",
-                "hidden_size": 4096,
-                "dtype_bytes": "{dtype_bytes}"
-              }
+              "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm"
             }
           ]
         },
         {
           "name": "norm",
-          "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
-          "parameters": {
-            "B": "{batch_size}",
-            "S": "{seq_len}",
-            "hidden_size": 4096,
-            "dtype_bytes": "{dtype_bytes}"
-          }
+          "class": "transformers.models.llama.modeling_llama.LlamaRMSNorm"
         },
         {
           "name": "rotary_emb",
-          "class": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding",
-          "parameters": {
-            "B": "{batch_size}",
-            "S": "{seq_len}",
-            "head_dim": 128,
-            "dtype_bytes": "{dtype_bytes}"
-          }
+          "class": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding"
         }
       ]
     },
     {
       "name": "lm_head",
-      "class": "torch.nn.modules.linear.Linear",
-      "parameters": {
-        "N": "{batch_size} * {seq_len}",
-        "in_features": 4096,
-        "out_features": 32000,
-        "dtype_bytes": "{dtype_bytes}"
-      }
+      "class": "torch.nn.modules.linear.Linear"
     }
   ]
 }
