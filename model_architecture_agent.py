@@ -8,7 +8,6 @@ import json
 import os
 import subprocess
 from typing import Dict, Any, Optional
-from dotenv import dotenv_values
 from jsonschema import validate, ValidationError
 
 
@@ -67,21 +66,23 @@ class ModelArchitectureAgent:
             if os.path.exists(diagnostic_file):
                 os.remove(diagnostic_file)
 
-            # Prepare environment (current env + any from .env file)
-            env = os.environ.copy()
-
-            # Load .env variables only for this subprocess (doesn't affect system env)
-            env_vars = dotenv_values(".env")
-            env.update(env_vars)
-
             # Run Claude Code in headless mode
             result = subprocess.run([
                 self.claude_command, "-p", prompt,
-                "--dangerously-skip-permissions"
-            ], capture_output=True, text=True, timeout=600, env=env)
+                "--dangerously-skip-permissions",
+                "--verbose"
+            ], capture_output=True, text=True, timeout=600)
+
+            print(f"=== SUBPROCESS RESULT ===")
+            print(f"Return code: {result.returncode}")
+            print(f"=== STDOUT ===")
+            print(result.stdout)
+            print(f"=== STDERR ===")
+            print(result.stderr)
+            print(f"=== END SUBPROCESS RESULT ===")
 
             if result.returncode != 0:
-                raise RuntimeError(f"Claude Code failed: {result.stderr}")
+                raise RuntimeError(f"Claude Code failed with return code {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
 
             print("=== CLAUDE RESPONSE ===")
             print(result.stdout)
@@ -119,6 +120,11 @@ class ModelArchitectureAgent:
 
     def _create_architecture_prompt(self, model_id: str, model_structure: str, output_file: str) -> str:
         """Create the prompt for Claude Code to generate model architecture."""
+
+        # Load example and extract just the architecture (without metadata)
+        examples = self._load_examples()
+        example_architecture = examples["examples"]["llama-2-7b-hf"]
+        example_json = json.dumps(example_architecture, indent=2)
 
         return f"""
 ultrathink: Generate standardized model architecture JSON for: {model_id}
@@ -170,7 +176,8 @@ ultrathink 4. **Build Hierarchy**: Create the standardized JSON structure:
 ultrathink 5. **Write Architecture**: Create complete JSON matching the schema and write to {output_file}
    - Use exact class paths from enhanced structure
    - Ensure proper basic vs composite layer distinction
-   - Follow model_representation_examples.json format
+   - Follow the example format (DO NOT include $schema, description, or other metadata fields)
+   - Output ONLY: model_id and layers fields
    - Validate against schema requirements
 
 ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to {output_file.replace('.json', '_diagnostics.json')} with:
@@ -185,5 +192,10 @@ ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to 
      "status": "fail",
      "reason": "Description of what went wrong"
    }}
+
+## Example Output Format:
+{example_json}
+
+IMPORTANT: Output ONLY model_id and layers fields. NO $schema, title, description, or other metadata fields.
 
 """

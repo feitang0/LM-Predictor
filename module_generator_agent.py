@@ -11,7 +11,6 @@ import sys
 import argparse
 from typing import Dict, Any
 from pathlib import Path
-from dotenv import dotenv_values
 
 
 class ModuleGeneratorAgent:
@@ -83,21 +82,22 @@ class ModuleGeneratorAgent:
             if os.path.exists("generation_result_diagnostics.json"):
                 os.remove("generation_result_diagnostics.json")
 
-            # Prepare environment (current env + any from .env file)
-            env = os.environ.copy()
-
-            # Load .env variables only for this subprocess
-            env_vars = dotenv_values(".env")
-            env.update(env_vars)
-
             # Run Claude Code in headless mode
             result = subprocess.run([
                 self.claude_command, "-p", prompt,
                 "--dangerously-skip-permissions"
-            ], capture_output=True, text=True, timeout=600, env=env)
+            ], capture_output=True, text=True, timeout=600)
+
+            print(f"=== SUBPROCESS RESULT ===")
+            print(f"Return code: {result.returncode}")
+            print(f"=== STDOUT ===")
+            print(result.stdout)
+            print(f"=== STDERR ===")
+            print(result.stderr)
+            print(f"=== END SUBPROCESS RESULT ===")
 
             if result.returncode != 0:
-                raise RuntimeError(f"Claude Code failed: {result.stderr}")
+                raise RuntimeError(f"Claude Code failed with return code {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
 
             print("=== CLAUDE RESPONSE ===")
             print(result.stdout)
