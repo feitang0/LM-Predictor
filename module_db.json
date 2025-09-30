@@ -1,5 +1,709 @@
 {
   "version": "1.0",
   "description": "Module FLOP and memory analysis database with Claude Code agent integration",
-  "modules": {}
+  "modules": {
+    "torch_SiLU": {
+      "full_class_name": "torch.nn.modules.activation.SiLU",
+      "code_location": {
+        "file": "pytorch/torch/nn/modules/activation.py",
+        "line_start": 397,
+        "line_end": 438
+      },
+      "flop_analysis": {
+        "thinking_process": "SiLU is defined as silu(x) = x * sigmoid(x) where sigmoid(x) = 1/(1+exp(-x)). The decomposition shows: return self * torch.sigmoid(self). The operations per element are: 1) negate x: 1 FLOP, 2) compute exp(-x): 1 FLOP, 3) add 1 to exp(-x): 1 FLOP, 4) divide 1 by result: 1 FLOP, 5) multiply x by sigmoid result: 1 FLOP. Total: 5 FLOPs per element.",
+        "parameters": [
+          {
+            "name": "num_elements",
+            "type": "int",
+            "description": "total number of elements in input tensor"
+          }
+        ],
+        "calculation_formula": "5 * ${num_elements}",
+        "module_depends": [],
+        "breakdown": {
+          "negate": "1 * ${num_elements}",
+          "exponential": "1 * ${num_elements}",
+          "addition": "1 * ${num_elements}",
+          "division": "1 * ${num_elements}",
+          "multiplication": "1 * ${num_elements}"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "SiLU is an element-wise activation function with no learnable parameters. Memory access pattern: reads input tensor once, writes output tensor of same size. Implementation may create intermediate sigmoid tensor during computation before final multiplication.",
+        "parameters": [
+          {
+            "name": "num_elements",
+            "type": "int",
+            "description": "total number of elements in input tensor"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "${num_elements} * ${dtype_bytes}",
+        "writes_calculation_formula": "${num_elements} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "${num_elements} * ${dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "torch_Linear": {
+      "full_class_name": "torch.nn.modules.linear.Linear",
+      "code_location": {
+        "file": "pytorch/torch/nn/modules/linear.py",
+        "line_start": 50,
+        "line_end": 129
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step reasoning: 1) The Linear module performs y = x @ weight.T + bias where input x has shape (..., in_features), weight has shape (out_features, in_features), and optional bias has shape (out_features). 2) Matrix multiplication x @ weight.T requires 2 * N * in_features * out_features FLOPs (N multiply-add operations for each of the in_features * out_features elements). 3) Bias addition requires N * out_features additional FLOPs. 4) Total: 2 * N * in_features * out_features + N * out_features = N * out_features * (2 * in_features + 1).",
+        "parameters": [
+          {
+            "name": "N",
+            "type": "int",
+            "description": "total number of input samples (flattened batch dimensions)"
+          },
+          {
+            "name": "in_features",
+            "type": "int",
+            "description": "size of each input sample"
+          },
+          {
+            "name": "out_features",
+            "type": "int",
+            "description": "size of each output sample"
+          }
+        ],
+        "calculation_formula": "2 * ${N} * ${in_features} * ${out_features} + ${N} * ${out_features}",
+        "module_depends": [],
+        "breakdown": {
+          "matrix_multiplication": "2 * ${N} * ${in_features} * ${out_features}",
+          "bias_addition": "${N} * ${out_features}"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: 1) Input tensor (N * in_features elements) is read once. 2) Weight matrix (out_features * in_features elements) is read once. 3) Bias vector (out_features elements) is read once if present. 4) Output tensor (N * out_features elements) is written once. 5) No significant intermediate tensors are stored as matrix multiplication can be computed directly into output buffer.",
+        "parameters": [
+          {
+            "name": "N",
+            "type": "int",
+            "description": "total number of input samples (flattened batch dimensions)"
+          },
+          {
+            "name": "in_features",
+            "type": "int",
+            "description": "size of each input sample"
+          },
+          {
+            "name": "out_features",
+            "type": "int",
+            "description": "size of each output sample"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "${N} * ${in_features} * ${dtype_bytes} + ${out_features} * ${in_features} * ${dtype_bytes} + ${out_features} * ${dtype_bytes}",
+        "writes_calculation_formula": "${N} * ${out_features} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "0",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "torch_Embedding": {
+      "full_class_name": "torch.nn.modules.sparse.Embedding",
+      "code_location": {
+        "file": "pytorch/torch/nn/modules/sparse.py",
+        "line_start": 15,
+        "line_end": 268
+      },
+      "flop_analysis": {
+        "thinking_process": "The embedding operation is fundamentally a lookup/indexing operation, not an arithmetic computation. Given input indices of shape (*), it selects corresponding rows from the weight matrix of shape (num_embeddings, embedding_dim) and returns a tensor of shape (*, embedding_dim). The core operation in the decomposition is either weight.index_select(0, indices) for 1D indices or weight[indices] for higher dimensional indices. Both operations are memory access patterns that copy data without performing any floating-point arithmetic operations. Therefore, the FLOP count for embedding lookup is 0.",
+        "parameters": [
+          {
+            "name": "num_indices",
+            "type": "int",
+            "description": "total number of indices being looked up (product of all input dimensions)"
+          }
+        ],
+        "calculation_formula": "0",
+        "module_depends": [],
+        "breakdown": {
+          "embedding_lookup": "0"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern analysis: 1) Weight matrix reads: Only the specific rows corresponding to input indices are accessed, not the entire weight matrix - this equals num_indices * embedding_dim * dtype_bytes. 2) Input indices reads: The indices tensor is read to determine which embeddings to lookup - this equals num_indices * index_dtype_bytes (typically 8 bytes for int64). 3) Output writes: Selected embedding vectors are written to output tensor - this equals num_indices * embedding_dim * dtype_bytes. 4) Intermediates: No intermediate tensors are typically created as this is a direct lookup operation.",
+        "parameters": [
+          {
+            "name": "num_indices",
+            "type": "int",
+            "description": "total number of indices being looked up (product of all input dimensions)"
+          },
+          {
+            "name": "embedding_dim",
+            "type": "int",
+            "description": "dimension of each embedding vector"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element for embedding weights"
+          },
+          {
+            "name": "index_dtype_bytes",
+            "type": "int",
+            "description": "bytes per index element (typically 8 for int64)"
+          }
+        ],
+        "reads_calculation_formula": "${num_indices} * ${embedding_dim} * ${dtype_bytes} + ${num_indices} * ${index_dtype_bytes}",
+        "writes_calculation_formula": "${num_indices} * ${embedding_dim} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "0",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaDecoderLayer": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaDecoderLayer",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 268,
+        "line_end": 311
+      },
+      "flop_analysis": {
+        "thinking_process": "LlamaDecoderLayer performs: 1) input layer norm (RMSNorm operations: pow, mean, rsqrt, multiply operations = ~3*B*S*hidden_size), 2) self-attention with Q/K/V projections, attention computation, and output projection, 3) residual connection (+B*S*hidden_size), 4) post-attention layer norm (same as input), 5) MLP with gate/up/down projections and SiLU activation, 6) final residual connection. The attention computation includes matmul for scores (B*num_heads*S*S*head_dim) and matmul for output (B*num_heads*S*S*head_dim). MLP includes SiLU activation (~4*B*S*intermediate_size operations) and element-wise multiplication.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "num_attention_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          },
+          {
+            "name": "num_key_value_heads",
+            "type": "int",
+            "description": "number of key-value heads for grouped query attention"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "dimension per attention head (hidden_size // num_attention_heads)"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension"
+          }
+        ],
+        "calculation_formula": "{transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size}) + {transformers.models.llama.modeling_llama.LlamaAttention}(${B}, ${S}, ${hidden_size}, ${num_attention_heads}, ${num_key_value_heads}, ${head_dim}) + ${B} * ${S} * ${hidden_size} + {transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size}) + {transformers.models.llama.modeling_llama.LlamaMLP}(${B} * ${S}, ${hidden_size}, ${intermediate_size}) + ${B} * ${S} * ${hidden_size}",
+        "module_depends": [
+          "transformers.models.llama.modeling_llama.LlamaRMSNorm",
+          "transformers.models.llama.modeling_llama.LlamaAttention",
+          "transformers.models.llama.modeling_llama.LlamaMLP"
+        ],
+        "breakdown": {
+          "input_layernorm": "{transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size})",
+          "self_attention": "{transformers.models.llama.modeling_llama.LlamaAttention}(${B}, ${S}, ${hidden_size}, ${num_attention_heads}, ${num_key_value_heads}, ${head_dim})",
+          "residual_1": "${B} * ${S} * ${hidden_size}",
+          "post_attention_layernorm": "{transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size})",
+          "mlp": "{transformers.models.llama.modeling_llama.LlamaMLP}(${B} * ${S}, ${hidden_size}, ${intermediate_size})",
+          "residual_2": "${B} * ${S} * ${hidden_size}"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access includes: 1) Reading all layer weights (RMSNorm weights: 2*hidden_size, Attention weights: hidden_size*(num_attention_heads*head_dim + 2*num_key_value_heads*head_dim + num_attention_heads*head_dim), MLP weights: hidden_size*(2*intermediate_size + intermediate_size)), 2) Reading input activations (B*S*hidden_size), 3) Writing output activations (B*S*hidden_size), 4) Intermediate tensors include attention scores (largest: B*num_attention_heads*S*S), Q/K/V projections, and MLP intermediate activations.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "num_attention_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          },
+          {
+            "name": "num_key_value_heads",
+            "type": "int",
+            "description": "number of key-value heads for grouped query attention"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "dimension per attention head"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "(2 * ${hidden_size} + ${hidden_size} * (${num_attention_heads} * ${head_dim} + 2 * ${num_key_value_heads} * ${head_dim} + ${num_attention_heads} * ${head_dim}) + ${hidden_size} * (2 * ${intermediate_size}) + ${intermediate_size} * ${hidden_size} + ${B} * ${S} * ${hidden_size}) * ${dtype_bytes}",
+        "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "(${B} * ${num_attention_heads} * ${S} * ${S} + ${B} * ${S} * (${num_attention_heads} * ${head_dim} + 2 * ${num_key_value_heads} * ${head_dim} + 2 * ${intermediate_size})) * ${dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaMLP": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaMLP",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 143,
+        "line_end": 156
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step reasoning: 1) gate_proj performs Linear(hidden_size, intermediate_size) on input [B,S,hidden_size] = {torch.nn.Linear}(B*S, hidden_size, intermediate_size). 2) SiLU activation on gate_proj output requires ~4 FLOPs per element = 4*B*S*intermediate_size. 3) up_proj performs Linear(hidden_size, intermediate_size) on same input = {torch.nn.Linear}(B*S, hidden_size, intermediate_size). 4) Element-wise multiplication of SiLU(gate_proj(x)) * up_proj(x) = B*S*intermediate_size FLOPs. 5) down_proj performs Linear(intermediate_size, hidden_size) = {torch.nn.Linear}(B*S, intermediate_size, hidden_size).",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension"
+          }
+        ],
+        "calculation_formula": "2 * {torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size}) + {torch.nn.Linear}(${B} * ${S}, ${intermediate_size}, ${hidden_size}) + 5 * ${B} * ${S} * ${intermediate_size}",
+        "module_depends": [
+          "torch.nn.Linear"
+        ],
+        "breakdown": {
+          "gate_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size})",
+          "silu_activation": "4 * ${B} * ${S} * ${intermediate_size}",
+          "up_proj": "{torch.nn.Linear}(${B} * ${S}, ${hidden_size}, ${intermediate_size})",
+          "elementwise_multiply": "${B} * ${S} * ${intermediate_size}",
+          "down_proj": "{torch.nn.Linear}(${B} * ${S}, ${intermediate_size}, ${hidden_size})"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: Parameter matrices are read once each (gate_proj, up_proj, down_proj weights). Input activations x are read once for both gate_proj and up_proj. Intermediate tensors are created for gate_proj output, up_proj output, SiLU activation result, and elementwise multiplication result. Final output is written once.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "intermediate_size",
+            "type": "int",
+            "description": "MLP intermediate dimension"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "3 * ${hidden_size} * ${intermediate_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "4 * ${B} * ${S} * ${intermediate_size} * ${dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaModel": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaModel",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 353,
+        "line_end": 409
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step reasoning: 1) Embedding lookup has no FLOPs, just memory access. 2) Rotary embedding computation involves matrix multiplication (B * head_dim * S FLOPs) and element-wise cos/sin operations (2 * B * S * head_dim FLOPs), totaling 3 * B * S * head_dim. 3) Main computation is the decoder layers loop with num_hidden_layers iterations, each calling a LlamaDecoderLayer. 4) Final layer norm adds one LlamaRMSNorm call.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "num_hidden_layers",
+            "type": "int",
+            "description": "number of decoder layers"
+          },
+          {
+            "name": "num_attention_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          }
+        ],
+        "calculation_formula": "3 * ${B} * ${S} * (${hidden_size} // ${num_attention_heads}) + ${num_hidden_layers} * {transformers.models.llama.modeling_llama.LlamaDecoderLayer}(${B}, ${S}, ${hidden_size}) + {transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size})",
+        "module_depends": [
+          "transformers.models.llama.modeling_llama.LlamaDecoderLayer",
+          "transformers.models.llama.modeling_llama.LlamaRMSNorm"
+        ],
+        "breakdown": {
+          "rotary_embeddings": "3 * ${B} * ${S} * (${hidden_size} // ${num_attention_heads})",
+          "decoder_layers": "${num_hidden_layers} * {transformers.models.llama.modeling_llama.LlamaDecoderLayer}(${B}, ${S}, ${hidden_size})",
+          "final_norm": "{transformers.models.llama.modeling_llama.LlamaRMSNorm}(${B} * ${S}, ${hidden_size})"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: 1) Input embeddings are read from embedding lookup. 2) Each decoder layer reads its own parameters and processes activations. 3) Position embeddings (cos, sin) are computed and stored as intermediates. 4) Causal mask is created and stored. 5) Final hidden states are written as output. The memory usage includes parameter reads delegated to submodules and intermediate activation storage.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "vocab_size",
+            "type": "int",
+            "description": "vocabulary size"
+          },
+          {
+            "name": "num_hidden_layers",
+            "type": "int",
+            "description": "number of decoder layers"
+          },
+          {
+            "name": "num_attention_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "${vocab_size} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${hidden_size} * ${dtype_bytes} + ${num_hidden_layers} * {transformers.models.llama.modeling_llama.LlamaDecoderLayer}(reads) + ${hidden_size} * ${dtype_bytes}",
+        "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "2 * ${B} * ${S} * (${hidden_size} // ${num_attention_heads}) * ${dtype_bytes} + ${B} * ${S} * ${S} * ${dtype_bytes} + ${S} * ${dtype_bytes} + ${B} * ${S} * ${dtype_bytes}",
+        "module_depends": [
+          "transformers.models.llama.modeling_llama.LlamaDecoderLayer"
+        ]
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaRMSNorm": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 53,
+        "line_end": 67
+      },
+      "flop_analysis": {
+        "thinking_process": "RMSNorm operations: 1) Element-wise squaring of input tensor (B*S*hidden_size FLOPs), 2) Mean reduction along last dimension (B*S*hidden_size FLOPs for sum + B*S for division), 3) Add epsilon and compute reciprocal square root (2*B*S FLOPs), 4) Element-wise multiplication for normalization (B*S*hidden_size FLOPs), 5) Element-wise multiplication with learnable weight (B*S*hidden_size FLOPs). Total: 4*B*S*hidden_size + 2*B*S FLOPs.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          }
+        ],
+        "calculation_formula": "4 * ${B} * ${S} * ${hidden_size} + 2 * ${B} * ${S}",
+        "module_depends": [],
+        "breakdown": {
+          "squaring": "${B} * ${S} * ${hidden_size}",
+          "mean_reduction": "${B} * ${S} * ${hidden_size}",
+          "add_epsilon_and_rsqrt": "2 * ${B} * ${S}",
+          "normalization_multiply": "${B} * ${S} * ${hidden_size}",
+          "weight_multiply": "${B} * ${S} * ${hidden_size}"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: Read input tensor (B*S*hidden_size elements), read weight parameter (hidden_size elements), write output tensor (B*S*hidden_size elements). Intermediates include squared values, variance tensor, and normalization results.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes} + ${hidden_size} * ${dtype_bytes}",
+        "writes_calculation_formula": "${B} * ${S} * ${hidden_size} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "2 * ${B} * ${S} * ${hidden_size} * ${dtype_bytes} + ${B} * ${S} * ${dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaRotaryEmbedding": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 73,
+        "line_end": 106
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step FLOP analysis: 1) Matrix multiplication: inv_freq_expanded [B, head_dim//2, 1] @ position_ids_expanded [B, 1, S] = [B, head_dim//2, S] costs B * S * head_dim // 2 FLOPs. 2) Cosine operation on emb [B, S, head_dim] costs B * S * head_dim FLOPs. 3) Scalar multiplication of cos result costs B * S * head_dim FLOPs. 4) Sine operation on emb costs B * S * head_dim FLOPs. 5) Scalar multiplication of sin result costs B * S * head_dim FLOPs. Total: B * S * head_dim * (0.5 + 1 + 1 + 1 + 1) = 4.5 * B * S * head_dim FLOPs.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "attention head dimension (hidden_size // num_attention_heads)"
+          }
+        ],
+        "calculation_formula": "4.5 * ${B} * ${S} * ${head_dim}",
+        "module_depends": [],
+        "breakdown": {
+          "matrix_multiplication": "0.5 * ${B} * ${S} * ${head_dim}",
+          "cosine_computation": "${B} * ${S} * ${head_dim}",
+          "cosine_scaling": "${B} * ${S} * ${head_dim}",
+          "sine_computation": "${B} * ${S} * ${head_dim}",
+          "sine_scaling": "${B} * ${S} * ${head_dim}"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: 1) Read inv_freq buffer [head_dim//2] once, 2) Read position_ids [B, S] once, 3) Read attention_scaling scalar twice, 4) Write cos output [B, S, head_dim], 5) Write sin output [B, S, head_dim], 6) Largest intermediate is emb tensor [B, S, head_dim]. Total reads: inv_freq + position_ids + minimal scalar reads. Total writes: cos + sin outputs. Intermediates dominated by emb tensor storage.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "attention head dimension (hidden_size // num_attention_heads)"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "(${head_dim} // 2 + ${B} * ${S}) * ${dtype_bytes}",
+        "writes_calculation_formula": "2 * ${B} * ${S} * ${head_dim} * ${dtype_bytes}",
+        "intermediates_calculation_formula": "${B} * ${S} * ${head_dim} * ${dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    },
+    "transformers_LlamaSdpaAttention": {
+      "full_class_name": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+      "code_location": {
+        "file": "transformers/src/transformers/models/llama/modeling_llama.py",
+        "line_start": 600,
+        "line_end": 685
+      },
+      "flop_analysis": {
+        "thinking_process": "Step-by-step reasoning: 1) Q, K, V projections are 3 linear layers with different output dimensions based on num_heads vs num_key_value_heads (GQA support). Q projection maps to num_heads*head_dim, while K,V map to num_key_value_heads*head_dim. 2) RoPE applies rotary position embedding via element-wise operations (q*cos + rotate_half(q)*sin) for both Q and K tensors - 3 FLOPs per element. 3) repeat_kv expands K and V to match number of heads (tensor ops, no FLOPs). 4) SDPA performs scaled dot-product attention with Q\u00b7K^T and attention\u00b7V matmuls, estimated as 2*B*num_heads*S*S*head_dim FLOPs. 5) Output projection is final linear layer mapping back to hidden_size.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "num_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          },
+          {
+            "name": "num_key_value_heads",
+            "type": "int",
+            "description": "number of key-value heads (for grouped query attention)"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "dimension per attention head"
+          }
+        ],
+        "calculation_formula": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_heads} * {head_dim}) + ${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_key_value_heads} * {head_dim}) + ${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_key_value_heads} * {head_dim}) + 3 * {B} * {num_heads} * {S} * {head_dim} + 3 * {B} * {num_key_value_heads} * {S} * {head_dim} + 2 * {B} * {num_heads} * {S} * {S} * {head_dim} + ${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})",
+        "module_depends": [
+          "torch.nn.Linear"
+        ],
+        "breakdown": {
+          "q_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_heads} * {head_dim})",
+          "k_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_key_value_heads} * {head_dim})",
+          "v_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {num_key_value_heads} * {head_dim})",
+          "rope_q": "3 * {B} * {num_heads} * {S} * {head_dim}",
+          "rope_k": "3 * {B} * {num_key_value_heads} * {S} * {head_dim}",
+          "sdpa_attention": "2 * {B} * {num_heads} * {S} * {S} * {head_dim}",
+          "o_proj": "${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size})"
+        }
+      },
+      "memory_analysis": {
+        "thinking_process": "Memory access pattern: Parameter weights (q_proj, k_proj, v_proj, o_proj) are read once each. Input hidden_states read once. Intermediate tensors include Q/K/V projections after reshape, and attention weights matrix. The attention weights matrix [B, num_heads, S, S] is typically the largest intermediate. Output is the final attention result. Parameter reads include all linear layer weights, with different dimensions for GQA.",
+        "parameters": [
+          {
+            "name": "B",
+            "type": "int",
+            "description": "batch size"
+          },
+          {
+            "name": "S",
+            "type": "int",
+            "description": "sequence length"
+          },
+          {
+            "name": "hidden_size",
+            "type": "int",
+            "description": "model hidden dimension"
+          },
+          {
+            "name": "num_heads",
+            "type": "int",
+            "description": "number of attention heads"
+          },
+          {
+            "name": "num_key_value_heads",
+            "type": "int",
+            "description": "number of key-value heads (for grouped query attention)"
+          },
+          {
+            "name": "head_dim",
+            "type": "int",
+            "description": "dimension per attention head"
+          },
+          {
+            "name": "dtype_bytes",
+            "type": "int",
+            "description": "bytes per data type element"
+          }
+        ],
+        "reads_calculation_formula": "({hidden_size} * {num_heads} * {head_dim} + 2 * {hidden_size} * {num_key_value_heads} * {head_dim} + {hidden_size} * {hidden_size}) * {dtype_bytes} + {B} * {S} * {hidden_size} * {dtype_bytes}",
+        "writes_calculation_formula": "{B} * {S} * {hidden_size} * {dtype_bytes}",
+        "intermediates_calculation_formula": "{B} * {num_heads} * {S} * {S} * {dtype_bytes}",
+        "module_depends": []
+      },
+      "validation": {
+        "human_validated": false
+      }
+    }
+  }
 }
