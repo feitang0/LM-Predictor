@@ -327,6 +327,8 @@ def main():
                        help='Output file path (default: auto-generated)')
     parser.add_argument('--generate-arch', action='store_true',
                        help='Generate standardized model architecture JSON during inspection')
+    parser.add_argument('--populate-arch', action='store_true',
+                       help='Populate parameters for architecture JSON (requires architecture to exist in models/)')
 
     args = parser.parse_args()
 
@@ -374,6 +376,41 @@ def main():
                 with open(output_path, 'w') as f:
                     json.dump(architecture, f, indent=2)
                 print(f"✓ Architecture saved to {output_path}")
+
+            if args.populate_arch:
+                # Populate parameters for architecture JSON
+                from populate_parameters_agent import PopulateParametersAgent
+
+                # Load architecture JSON from models/ directory
+                arch_path = f"models/{args.model_id.replace('/', '-')}.json"
+                if not os.path.exists(arch_path):
+                    raise FileNotFoundError(
+                        f"Architecture JSON not found: {arch_path}\n"
+                        f"Run with --generate-arch first to create the architecture file."
+                    )
+
+                with open(arch_path, 'r') as f:
+                    architecture_json = json.load(f)
+
+                # Get model config and enhanced structure (already in memory)
+                model_config = analyzer.config.to_dict()
+                enhanced_structure = analyzer.get_enhanced_model_str()
+
+                # Populate architecture using agent
+                # Runtime parameters (batch_size, seq_len, dtype_bytes) will be populated as templates
+                agent = PopulateParametersAgent()
+                populated_arch = agent.populate_architecture_with_agent(
+                    architecture_json=architecture_json,
+                    model_config=model_config,
+                    enhanced_model_structure=enhanced_structure
+                )
+
+                # Save populated architecture
+                output_path = f"models/{args.model_id.replace('/', '-')}_populated.json"
+                with open(output_path, 'w') as f:
+                    json.dump(populated_arch, f, indent=2)
+                print(f"✓ Populated architecture saved to {output_path}")
+                print(f"  Runtime parameters use template format: {{batch_size}}, {{seq_len}}, {{w_dtype_bytes}}, {{a_dtype_bytes}}")
 
     except Exception as e:
         print(f"Error: {e}")
