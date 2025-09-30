@@ -151,7 +151,7 @@ class ModelAnalyzer:
 
         return basic_layers
 
-    def _analyze_basic_layer(self, layer_info, batch_size, seq_len, dtype_bytes):
+    def _analyze_basic_layer(self, layer_info, batch_size, seq_len, w_dtype_bytes, a_dtype_bytes):
         """Analyze a single basic layer using registry."""
         from generated_modules.registry import compute_flops, compute_memory
 
@@ -163,7 +163,9 @@ class ModelAnalyzer:
                 param_str = param_value
                 param_str = param_str.replace("{batch_size}", str(batch_size))
                 param_str = param_str.replace("{seq_len}", str(seq_len))
-                param_str = param_str.replace("{dtype_bytes}", str(dtype_bytes))
+                param_str = param_str.replace("{w_dtype_bytes}", str(w_dtype_bytes))
+                param_str = param_str.replace("{a_dtype_bytes}", str(a_dtype_bytes))
+                param_str = param_str.replace("{dtype_bytes}", str(a_dtype_bytes))  # Legacy fallback
                 param_str = param_str.replace("{index_dtype_bytes}", "4")
                 resolved_params[param_name] = eval(param_str)  # Safe for arithmetic expressions
             else:
@@ -241,11 +243,12 @@ class ModelAnalyzer:
         print(f"\nAnalyzing {len(basic_layers)} basic layers:")
 
         # Analyze each basic layer
-        dtype_bytes = a_bit // 8
+        w_dtype_bytes = w_bit // 8
+        a_dtype_bytes = a_bit // 8
         results = []
 
         for layer_info in basic_layers:
-            analysis = self._analyze_basic_layer(layer_info, batchsize, seqlen, dtype_bytes)
+            analysis = self._analyze_basic_layer(layer_info, batchsize, seqlen, w_dtype_bytes, a_dtype_bytes)
             results.append(analysis)
 
             # Print progress (only for layers with FLOPs)
@@ -306,6 +309,36 @@ class ModelAnalyzer:
         return legacy_results
 
 
+def extract_basic_layer_classes(architecture: Dict[str, Any]) -> set[str]:
+    """
+    Recursively extract all unique basic layer class names from architecture.
+    Basic layers are those WITHOUT 'sub_layers' field.
+
+    Args:
+        architecture: Architecture JSON with layers structure
+
+    Returns:
+        Set of unique class names for basic layers
+    """
+    classes: set[str] = set()
+
+    def traverse(layer: Dict[str, Any]) -> None:
+        if "sub_layers" not in layer:
+            # Basic layer - add its class
+            class_name = layer.get("class", "")
+            if class_name:
+                classes.add(class_name)
+        else:
+            # Composite layer - recurse into sub_layers
+            for sub_layer in layer.get("sub_layers", []):
+                traverse(sub_layer)
+
+    for layer in architecture.get("layers", []):
+        traverse(layer)
+
+    return classes
+
+
 def main():
     """Command-line interface for model analysis."""
     parser = argparse.ArgumentParser(description='Analyze LLM model FLOPs and memory using modular approach')
@@ -327,6 +360,8 @@ def main():
                        help='Output file path (default: auto-generated)')
     parser.add_argument('--generate-arch', action='store_true',
                        help='Generate standardized model architecture JSON during inspection')
+    parser.add_argument('--ensure-modules', action='store_true',
+                       help='Ensure all modules needed by architecture are analyzed and generated')
     parser.add_argument('--populate-arch', action='store_true',
                        help='Populate parameters for architecture JSON (requires architecture to exist in models/)')
 
@@ -376,6 +411,62 @@ def main():
                 with open(output_path, 'w') as f:
                     json.dump(architecture, f, indent=2)
                 print(f"✓ Architecture saved to {output_path}")
+
+            if args.ensure_modules:
+                # Ensure all modules needed by architecture are analyzed and generated
+                from module_analyzer import ModuleAnalyzer as ModuleAnalyzerCore
+
+                # Load architecture JSON from models/ directory
+                arch_path = f"models/{args.model_id.replace('/', '-')}.json"
+                if not os.path.exists(arch_path):
+                    raise FileNotFoundError(
+                        f"Architecture JSON not found: {arch_path}\n"
+                        f"Run with --generate-arch first to create the architecture file."
+                    )
+
+                with open(arch_path, 'r') as f:
+                    architecture_json = json.load(f)
+
+                # Extract all basic layer classes
+                basic_classes = extract_basic_layer_classes(architecture_json)
+                print(f"\n=== Module Ensure ===")
+                print(f"Found {len(basic_classes)} unique basic layer types in architecture")
+
+                # Use ModuleAnalyzer to check and generate missing modules
+                module_analyzer = ModuleAnalyzerCore()
+
+                generated = []
+                cached = []
+                failed = []
+
+                for class_name in sorted(basic_classes):
+                    print(f"\nChecking module: {class_name}")
+
+                    if module_analyzer.is_cached(class_name):
+                        print(f"  ✓ Already in database")
+                        cached.append(class_name)
+                    else:
+                        print(f"  → Analyzing with agent...")
+                        try:
+                            # This will analyze AND generate the module
+                            module_analyzer.analyze_module(class_name, force=False, generate=True)
+                            print(f"  ✓ Analysis and generation complete")
+                            generated.append(class_name)
+                        except Exception as e:
+                            print(f"  ✗ Failed: {e}")
+                            failed.append(class_name)
+
+                # Summary
+                print(f"\n=== Module Ensure Summary ===")
+                print(f"Cached: {len(cached)}")
+                print(f"Generated: {len(generated)}")
+                if generated:
+                    for cls in generated:
+                        print(f"  - {cls}")
+                print(f"Failed: {len(failed)}")
+                if failed:
+                    for cls in failed:
+                        print(f"  - {cls}")
 
             if args.populate_arch:
                 # Populate parameters for architecture JSON
