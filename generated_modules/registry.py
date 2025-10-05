@@ -33,28 +33,31 @@ class ModuleRegistry:
                 self._modules[full_class_name] = module_class
 
     def _load_module_class(self, module_key: str, full_class_name: str) -> Optional[Type[BaseModule]]:
-        """Load a specific module class by key using manual mapping."""
+        """Load a specific module class by key using naming from module_db.json."""
         try:
-            # Manual mapping for reliable module loading
-            # Format: module_key -> (filename, class_name)
-            module_mapping = {
-                "transformers_LlamaMLP": ("transformers_llama_mlp", "TransformersLlamaMLP"),
-                "torch_SiLU": ("torch_silu", "TorchSiLU"),
-                "torch_ModuleList": ("torch_module_list", "TorchModuleList"),
-                "torch_Linear": ("torch_linear", "TorchLinear"),
-                "torch_Embedding": ("torch_embedding", "TorchEmbedding"),
-                "transformers_LlamaDecoderLayer": ("transformers_llama_decoder_layer", "TransformersLlamaDecoderLayer"),
-                "transformers_LlamaForCausalLM": ("transformers_llama_for_causal_lm", "TransformersLlamaForCausalLM"),
-                "transformers_LlamaRMSNorm": ("transformers_llama_rms_norm", "TransformersLlamaRMSNorm"),
-                "transformers_LlamaRotaryEmbedding": ("transformers_llama_rotary_embedding", "TransformersLlamaRotaryEmbedding"),
-                "transformers_LlamaSdpaAttention": ("transformers_llama_sdpa_attention", "TransformersLlamaSdpaAttention"),
-            }
+            # Read module data from database to get naming information
+            with open(self._module_db_path, 'r') as f:
+                db = json.load(f)
 
-            if module_key not in module_mapping:
-                return None
+            module_data = db.get("modules", {}).get(module_key, {})
 
-            module_file, class_name = module_mapping[module_key]
-            module_path = f"generated_modules.{module_file}"
+            # Try to read stored naming (new approach)
+            file_name = module_data.get("generated_file_name")
+            class_name = module_data.get("generated_class_name")
+
+            # Fallback to derivation for legacy entries without naming fields
+            if not file_name or not class_name:
+                print(f"Warning: Module {module_key} missing naming fields, using fallback derivation")
+                # Simple derivation: lowercase for file, capitalize parts for class
+                file_name = module_key.lower() + ".py"
+                parts = module_key.split("_")
+                class_name = "".join(part.capitalize() for part in parts)
+
+            # Remove .py extension if present
+            if file_name.endswith(".py"):
+                file_name = file_name[:-3]
+
+            module_path = f"generated_modules.{file_name}"
 
             # Import the module and get the class
             module = importlib.import_module(module_path)

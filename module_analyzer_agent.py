@@ -159,9 +159,20 @@ ultrathink 4. **Analyze Memory**: Calculate data movement within this module:
    - **Writes**: Output activations (what this module produces)
    - **Intermediates**: Temporary tensors created during computation
 
-ultrathink 5. **Write Analysis**: Create complete JSON matching the schema and write to {output_file}
+ultrathink 5. **Decide Naming**: Determine the generated file name and class name using semantic rules:
+   - Extract library and class name from full_class_name
+   - File naming: Convert to snake_case with library prefix
+     Examples:
+     * torch.nn.modules.activation.SiLU → file: "torch_silu.py", class: "TorchSilu"
+     * torch.nn.modules.linear.Linear → file: "torch_linear.py", class: "TorchLinear"
+     * transformers.models.llama.modeling_llama.LlamaRMSNorm → file: "transformers_llama_rms_norm.py", class: "TransformersLlamaRMSNorm"
+     * transformers.models.llama.modeling_llama.LlamaSdpaAttention → file: "transformers_llama_sdpa_attention.py", class: "TransformersLlamaSdpaAttention"
+   - Use semantic understanding to handle acronyms (RMS, SDPA, MLP) and word boundaries
+   - Class naming: PascalCase with library prefix (e.g., TorchSilu, TransformersLlamaRMSNorm)
 
-ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to {output_file.replace('.json', '_diagnostics.json')} with:
+ultrathink 6. **Write Analysis**: Create complete JSON matching the schema (including generated_file_name and generated_class_name) and write to {output_file}
+
+ultrathink 7. **Write Diagnostics**: Create diagnostic information and write to {output_file.replace('.json', '_diagnostics.json')} with:
    If successful:
    {{
      "module_analyzed": "{module_spec}",
@@ -175,7 +186,7 @@ ultrathink 6. **Write Diagnostics**: Create diagnostic information and write to 
    }}
 
 ## Example Reference:
-Here's an example of the expected output format:
+Here's an example of the expected output format (NOTE: Add generated_file_name and generated_class_name fields):
 
 {example_json}
 

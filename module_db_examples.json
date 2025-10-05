@@ -36,7 +36,9 @@
     },
     "validation": {
       "human_validated": true
-    }
+    },
+    "generated_file_name": "torch_linear.py",
+    "generated_class_name": "TorchLinear"
   },
   {
     "full_class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
@@ -79,6 +81,8 @@
     },
     "validation": {
       "human_validated": false
-    }
+    },
+    "generated_file_name": "transformers_llama_attention.py",
+    "generated_class_name": "TransformersLlamaAttention"
   }
 ]

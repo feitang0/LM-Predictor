@@ -150,6 +150,14 @@
       },
       "required": ["human_validated"],
       "additionalProperties": false
+    },
+    "generated_file_name": {
+      "type": "string",
+      "description": "Actual generated filename (e.g., 'transformers_llama_rms_norm.py')"
+    },
+    "generated_class_name": {
+      "type": "string",
+      "description": "Actual generated class name (e.g., 'TransformersLlamaRMSNorm')"
     }
   },
   "required": ["full_class_name", "code_location", "flop_analysis", "memory_analysis", "validation"],

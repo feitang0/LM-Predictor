@@ -131,6 +131,9 @@ class ModuleGeneratorAgent:
     def _create_generation_prompt(self, module_data: Dict[str, Any]) -> str:
         """Create the prompt for Claude Code to generate module files."""
         full_class_name = module_data.get("full_class_name", "unknown")
+        generated_file_name = module_data.get("generated_file_name", "")
+        generated_class_name = module_data.get("generated_class_name", "")
+
         return f"""
 ultrathink: Generate Python module file from agent analysis response
 
@@ -146,7 +149,7 @@ Module Data:
 {json.dumps(module_data, indent=2)}
 
 IMPORTANT:
-1. Follow the naming conventions from updated DESIGN.md exactly
+1. Use EXACT naming from module_data: file_name="{generated_file_name}", class_name="{generated_class_name}"
 2. Generate real executable Python code, NOT template formulas
 3. Use new syntax: ${{}} for modules, {{}} for parameters
 4. Write generation result to generation_result.json (NOT as final step)
@@ -156,9 +159,10 @@ TODO List:
 
 ultrathink 1. **Process Data**: Examine the provided module analysis data for {full_class_name}
 
-ultrathink 2. **Determine Paths**: Convert full_class_name to required paths (flat structure):
-   - For torch.nn.Linear: class_name="TorchLinear", file_name="torch_linear.py"
-   - For transformers.models.llama.modeling_llama.LlamaMLP: class_name="TransformersLlamaMLP", file_name="transformers_llama_mlp.py"
+ultrathink 2. **Read Naming**: Use the naming from module_data:
+   - file_name: "{generated_file_name}" (from module_data["generated_file_name"])
+   - class_name: "{generated_class_name}" (from module_data["generated_class_name"])
+   - DO NOT derive naming yourself - use exactly what's provided in module_data
 
 ultrathink 3. **Generate Module File**: Create Python class following BaseModule pattern:
    - Import BaseModule from .base (since we're in flat structure)

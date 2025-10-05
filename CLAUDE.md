@@ -64,7 +64,8 @@ Architecture JSON (structure) → Populated Architecture (structure + parameters
 
 **Module Registry Pattern:**
 - Full class paths as keys: `torch.nn.modules.linear.Linear`
-- Auto-discovery via naming convention: `torch_Linear` → `TorchLinear` class
+- **Naming consistency**: Agent decides semantic naming (e.g., `torch_silu.py` / `TorchSilu`) and stores in `module_db.json`
+- Registry reads naming from database to ensure 100% consistency
 - Single source of truth: modules define their own required parameters via `get_required_parameters()`
 
 ### Core Pipeline Flow
@@ -76,10 +77,13 @@ flowchart LR
     C --> D[Populate Parameters]
     D --> E[Compute FLOPs/Memory]
 
-    C -->|Unknown Module| F[Claude Agent Analysis]
-    F --> G[Update module_db.json]
-    G --> H[Generate Python Class]
-    H --> C
+    C -->|Unknown Module| F[Module Analyzer Agent]
+    F -->|Analyzes forward| G[Formulas + Naming Decision]
+    G -->|Writes to| H[module_db.json]
+    H --> I[Module Generator Agent]
+    I -->|Reads naming from DB| J[Generate Python Class]
+    J --> K[Registry Loads Module]
+    K -->|Uses DB naming| C
 ```
 
 ## File Structure and Responsibilities
@@ -129,14 +133,20 @@ flowchart LR
 
 ### Naming Conventions
 - **Database keys**: `library_ClassName` (e.g., `torch_Linear`, `transformers_LlamaMLP`)
-- **Generated classes**: `LibraryClassName` (e.g., `TorchLinear`, `TransformersLlamaMlp`)
-- **File names**: snake_case from class name (e.g., `torch_linear.py`, `transformers_llama_mlp.py`)
+- **Generated classes**: `LibraryClassName` - Agent decides using semantic rules (e.g., `TorchLinear`, `TorchSilu`, `TransformersLlamaRmsNorm`)
+- **File names**: snake_case - Agent decides (e.g., `torch_linear.py`, `torch_silu.py`, `transformers_llama_rms_norm.py`)
 - **Full class paths**: Complete Python import paths (e.g., `torch.nn.modules.linear.Linear`)
+- **Naming workflow**:
+  1. `module_analyzer_agent.py` decides semantic naming for files/classes
+  2. Naming stored in `module_db.json` (`generated_file_name`, `generated_class_name`)
+  3. `module_generator_agent.py` reads naming from database
+  4. `registry.py` reads naming from database to load modules
+  5. **Result**: 100% naming consistency guaranteed
 
 ### Module Analysis
 - **Cache-first**: Always check `module_db.json` before invoking agents
-- **Database updates**: Module analysis results are cached in `module_db.json`
-- **Generation**: New module Python files are auto-generated in `generated_modules/`
+- **Database updates**: Module analysis results (formulas + naming) cached in `module_db.json`
+- **Generation**: New module Python files auto-generated in `generated_modules/` using exact naming from DB
 - **Validation**: Use `human_validated: false` initially, update after manual review
 
 ### Claude Code Agent Usage
@@ -171,26 +181,63 @@ Each module entry contains:
 - `flop_analysis` - FLOP formula with thinking process
 - `memory_analysis` - Memory read/write/intermediate formulas
 - `validation` - Human validation status
+- `generated_file_name` - Actual generated filename (e.g., `torch_silu.py`) - **NEW**
+- `generated_class_name` - Actual generated class name (e.g., `TorchSilu`) - **NEW**
 
 Formulas use `{param}` syntax for parameters (e.g., `2 * {N} * {in_features} * {out_features}`).
+
+**Example entry:**
+```json
+{
+  "torch_SiLU": {
+    "full_class_name": "torch.nn.modules.activation.SiLU",
+    "generated_file_name": "torch_silu.py",
+    "generated_class_name": "TorchSilu",
+    "flop_analysis": { ... },
+    "memory_analysis": { ... },
+    "validation": { "human_validated": false }
+  }
+}
+```
 
 ## Common Patterns
 
 **Adding Support for New Module:**
 1. Run `--ensure-modules` or analyze directly with `module_analyzer.py`
-2. Agent analyzes forward() method and generates formulas
-3. Results cached in `module_db.json`
-4. Python class auto-generated in `generated_modules/`
-5. Registry auto-discovers new module
+2. `module_analyzer_agent.py` analyzes forward() method:
+   - Generates FLOP/memory formulas
+   - Decides semantic naming (file_name + class_name)
+   - Writes everything to `module_db.json`
+3. `module_generator_agent.py` reads naming from DB and generates Python class
+4. Registry loads module using exact naming from database
+5. **Result**: No naming mismatches possible
 
 **Debugging Analysis Issues:**
 1. Check `*_diagnostics.json` files for agent failures
-2. Verify module exists in `module_db.json`
+2. Verify module exists in `module_db.json` with naming fields populated
 3. Check parameter template substitution in analysis step
 4. Validate all required parameters are populated
+5. If "Module not found" error: Check that `generated_file_name` and `generated_class_name` exist in DB
 
 **Extending for New Model:**
 1. Use `--generate-arch` to create architecture JSON
 2. Identify any new module types (basic layers)
-3. Run `--ensure-modules` to analyze unknown modules
+3. Run `--ensure-modules` to analyze unknown modules (auto-generates naming)
 4. Populate and analyze with runtime parameters
+
+**Complete Analysis Pipeline (Full Workflow):**
+```bash
+# Step 1: Generate architecture (structure only)
+uv run python model_analyzer.py --generate-arch --model_id meta-llama/Llama-2-7b-hf
+
+# Step 2: Ensure modules exist (analyzes unknown modules, generates naming)
+uv run python model_analyzer.py --ensure-modules --model_id meta-llama/Llama-2-7b-hf
+
+# Step 3: Populate parameters (adds runtime templates)
+uv run python model_analyzer.py --populate-arch --model_id meta-llama/Llama-2-7b-hf
+
+# Step 4: Run analysis (computes FLOPs/memory)
+uv run python model_analyzer.py --analyze \
+  --model_json models/meta-llama-Llama-2-7b-hf_populated.json \
+  --batch_size 1 --seq_len 2048 --w_bit 16 --a_bit 16
+```
