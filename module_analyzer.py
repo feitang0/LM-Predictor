@@ -113,8 +113,15 @@ class ModuleAnalyzer:
 
         return None
 
-    def analyze_module(self, module_spec: str, force: bool = False, generate: bool = False) -> Dict[str, Any]:
-        """Analyze module (cache-first)."""
+    def analyze_module(self, module_spec: str, force: bool = False, generate: bool = False, sub_layers: list = None) -> Dict[str, Any]:
+        """Analyze module (cache-first).
+
+        Args:
+            module_spec: Module specification (class name or full path)
+            force: Force re-analysis even if cached
+            generate: Automatically generate Python module file after analysis
+            sub_layers: Optional sub-layers from architecture (for composite modules)
+        """
         print(f"Analyzing {module_spec}...")
 
         # Check cache first (unless force is True)
@@ -156,7 +163,7 @@ class ModuleAnalyzer:
             print(f"⚡ Using agent for forced re-analysis...")
         else:
             print(f"⚡ Not cached, using agent...")
-        result = self.agent.analyze_module_with_agent(module_spec)
+        result = self.agent.analyze_module_with_agent(module_spec, sub_layers=sub_layers)
 
         # Cache result using standardized key
         db = self._load_db()

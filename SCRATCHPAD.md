@@ -262,3 +262,263 @@ Should see no "Module not found" errors.
 **Current**: Plan documented, ready for implementation
 **Next**: User approval, then implement all 5 steps above
 **Expected Outcome**: 100% consistent naming, no more "Module not found" errors
+
+---
+
+# Missing Composite Module FLOPs - 2025-10-14
+
+## Problem Statement
+
+**Issue**: Current FLOP analysis only counts operations within basic layer modules, missing higher-level composite operations like attention mechanisms and residual connections.
+
+**Observed Gap**: ~2-3 TFLOPs missing compared to LLM-Viewer reference
+
+### Comparison with LLM-Viewer
+
+**What we count correctly** ✓
+- Linear layer GEMMs (q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj, lm_head)
+- All Linear FLOPs match LLM-Viewer exactly
+
+**What we're missing** ❌
+
+| Operation | FLOPs (per layer) | Description | Location |
+|-----------|-------------------|-------------|----------|
+| qk_matmul | 34.4G | Q @ K^T attention scores | LlamaSdpaAttention |
+| sv_matmul | 34.4G | scores @ V attention output | LlamaSdpaAttention |
+| softmax | 671M | Softmax over attention scores | LlamaSdpaAttention |
+| attn_add | 8.4M | Residual connection (attention) | LlamaDecoderLayer |
+| mlp_add | 8.4M | Residual connection (MLP) | LlamaDecoderLayer |
+
+**Total missing per layer**: ~69.3G FLOPs
+**Total missing (×32 layers)**: ~2.2T FLOPs
+
+### Additional Issues Found
+
+1. **SiLU parameter bug**:
+   - Current: N = 8.2K (wrong)
+   - Should be: N = B * S * intermediate_size = 1 * 2048 * 11008 = 22.5M
+   - Expected FLOPs: 4 * 22.5M = 90M vs LLM-Viewer's 16.8M (formula may differ)
+
+2. **RMSNorm discrepancy**:
+   - Current: 33.6M FLOPs per layer
+   - LLM-Viewer: 58.7M FLOPs per layer
+   - Difference: ~75% higher (may include additional normalization operations)
+
+## Root Cause
+
+**Current Architecture**:
+- Only basic layers (no `sub_layers`) have computation
+- Composite layers (with `sub_layers`) are organizational containers only
+- Internal operations within composite layers are not modeled
+
+**Example**: `LlamaSdpaAttention` contains q/k/v/o Linear projections (counted ✓) but doesn't model:
+- QK matmul for attention scores
+- Softmax normalization
+- SV matmul for attention output
+
+These operations happen **between** the basic layer calls but aren't attributed to any module.
+
+## Solution Approaches
+
+### Option 1: Add Composite Module Calculators (RECOMMENDED)
+
+Treat certain composite modules as computational units:
+
+```python
+# In module_db.json
+"transformers_LlamaSdpaAttention": {
+  "full_class_name": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "is_composite": true,  // NEW: flag indicating composite with internal ops
+  "flop_analysis": {
+    "calculation_formula": "
+      4 * ${torch.nn.Linear}({B} * {S}, {hidden_size}, {hidden_size}) +  // q/k/v/o projs
+      2 * {B} * {num_heads} * {S} * {S} * {head_dim} +  // qk + sv matmuls
+      5 * {B} * {num_heads} * {S} * {S}  // softmax (5 ops per element)
+    "
+  }
+}
+```
+
+**Pros:**
+- ✅ Accurate FLOP accounting
+- ✅ Matches industry tools (LLM-Viewer)
+- ✅ Documents attention computation explicitly
+
+**Cons:**
+- Breaks current "basic vs composite" dichotomy
+- Requires agent to analyze composite module internals
+- More complex formulas with module references
+
+### Option 2: Post-Processing Layer
+
+Add a separate "attention operations" analysis after basic layer traversal:
+
+```python
+def analyze_attention_ops(arch, params):
+    """Count QK/SV matmuls, softmax for attention layers"""
+    for layer in find_layers(arch, "LlamaSdpaAttention"):
+        flops += calculate_attention_flops(params)
+```
+
+**Pros:**
+- ✅ Keeps basic/composite separation clean
+- ✅ Easier to implement incrementally
+
+**Cons:**
+- ❌ Hardcoded logic for specific architectures
+- ❌ Not generalizable to other models
+- ❌ Separate from module database
+
+### Option 3: Hybrid Approach
+
+Extend basic layers to reference their parent composite context:
+
+```python
+"torch_Linear": {
+  "flop_analysis": {
+    "calculation_formula": "2 * {N} * {in_features} * {out_features}"
+  },
+  "context_aware_ops": {
+    "within_attention": {
+      // Additional ops when Linear is inside attention
+      "qk_matmul_contribution": "..."
+    }
+  }
+}
+```
+
+**Pros:**
+- ✅ Context-aware computation
+- ✅ Maintains module focus
+
+**Cons:**
+- ❌ Very complex
+- ❌ Tight coupling between modules and contexts
+
+## Recommended Solution: Option 1
+
+**Rationale:**
+- Attention mechanisms are fundamental computation units
+- Agent can analyze forward() method of composite modules
+- Matches how other tools model transformers
+- Clean extension of current approach
+
+**Implementation:**
+1. Update schema: Add `is_composite` flag and allow composite modules in database
+2. Extend agent: Analyze composite module forward() when it contains direct computation
+3. Update registry: Load composite module calculators
+4. Update analysis: Traverse architecture and calculate composite module FLOPs
+
+## Next Steps
+
+1. Document residual connections (element-wise adds) - where should these be counted?
+2. Fix SiLU parameter population bug
+3. Investigate RMSNorm formula discrepancy
+4. Design composite module analysis workflow
+5. Implement attention FLOP calculation
+
+## Status
+
+**Current**: Issue documented with comparison data
+**Next**: Decide on solution approach and implementation priority
+**Expected Outcome**: Match LLM-Viewer FLOPs within <5% margin
+
+---
+
+# Composite Module Regeneration - 2025-10-15
+
+## Progress Update
+
+**Task**: Clean and regenerate all composite modules with proper sub_layers context for internal-operations-only analysis
+
+### Implementation Approach
+
+**Internal-Operations-Only Pattern**: Composite modules count ONLY operations that occur BETWEEN sub-layer calls to avoid double-counting.
+
+**Example - LlamaDecoderLayer**:
+- ✅ Count: Residual connections (element-wise additions)
+- ❌ Don't count: input_layernorm, self_attn, post_attention_layernorm, mlp (sub-layers handle their own FLOPs)
+
+**Example - LlamaMLP**:
+- ✅ Count: Element-wise multiplication between act_fn(gate_proj(x)) and up_proj(x)
+- ❌ Don't count: gate_proj, up_proj, down_proj Linear layers, act_fn SiLU (sub-layers)
+
+**Example - LlamaSdpaAttention**:
+- ✅ Count: RoPE application, QK matmul, softmax, SV matmul
+- ❌ Don't count: q_proj, k_proj, v_proj, o_proj Linear layers (sub-layers)
+
+### Completed Steps
+
+1. ✅ **Cleaned module_db.json**: Removed all composite module entries, keeping only 5 basic modules:
+   - torch_SiLU
+   - torch_Linear
+   - torch_Embedding
+   - transformers_LlamaRMSNorm
+   - transformers_LlamaRotaryEmbedding
+
+2. ✅ **Regenerated LlamaDecoderLayer**:
+   - Formula: `2 * {B} * {S} * {hidden_size}` (two residual connections)
+   - Correctly excludes all sub-layer operations
+   - Stored in module_db.json with naming: `transformers_llama_decoder_layer.py` / `TransformersLlamaDecoderLayer`
+
+3. ✅ **Regenerated LlamaMLP**:
+   - Formula: `{B} * {S} * {intermediate_size}` (element-wise multiplication)
+   - Correctly excludes gate_proj, up_proj, down_proj, act_fn
+   - Stored in module_db.json with naming: `transformers_llama_mlp.py` / `TransformersLlamaMLP`
+
+### In Progress
+
+4. 🔄 **Regenerating LlamaModel**: Currently being analyzed by agent with sub_layers context:
+   - Sub-layers: Embedding, LlamaDecoderLayer (×32), LlamaRMSNorm, LlamaRotaryEmbedding
+   - Expected: Mostly delegates to sub-layers, minimal internal operations (mask creation is negligible)
+
+### Remaining Tasks
+
+5. ⏳ **LlamaSdpaAttention**:
+   - Sub-layers: q_proj, k_proj, v_proj, o_proj (Linear), rotary_emb (LlamaRotaryEmbedding)
+   - Expected operations: RoPE application, QK matmul, softmax, SV matmul (~69G FLOPs per layer)
+
+6. ⏳ **LlamaForCausalLM**:
+   - Sub-layers: LlamaModel, lm_head (Linear)
+   - Expected operations: Optional cross-entropy loss computation
+
+### Technical Details
+
+**Sub-layers Context Injection**: Modified agent prompt to include composite module detection:
+```
+⚠️ COMPOSITE MODULE DETECTED ⚠️
+
+This module contains these sub-layers (already analyzed separately):
+[list of sub-layer classes]
+
+CRITICAL RULE: Count ONLY operations that occur BETWEEN sub-layer calls.
+- ✅ Include: Matmuls, softmax, element-wise ops, residual connections
+- ❌ Exclude: Any computation done by the sub-layers listed above
+```
+
+**Implementation Chain**:
+1. `model_analyzer.py::ensure_modules()` - Extracts ALL layer classes (basic + composite)
+2. `model_analyzer.py::find_layer_by_class()` - Looks up sub_layers from architecture
+3. `module_analyzer.py::analyze_module()` - Passes sub_layers to agent
+4. `module_analyzer_agent.py` - Injects composite context into prompt
+5. Agent analyzes only internal operations, writes to module_db.json
+
+### Expected Outcome
+
+After all 4 composite modules are regenerated:
+- **9 total modules**: 5 basic + 4 composite
+- **Accurate FLOP counting**: Internal operations captured without double-counting
+- **Match LLM-Viewer**: Should recover ~2.2T missing FLOPs (attention + residuals)
+
+### Next Steps
+
+1. Wait for --ensure-modules to complete (analyzing LlamaModel, LlamaSdpaAttention, LlamaForCausalLM)
+2. Verify all 4 composite modules generated correctly
+3. Run --populate-arch to add parameters to composite modules
+4. Run --analyze to compute total FLOPs and compare with LLM-Viewer
+
+## Status
+
+**Current**: Regenerating composite modules with internal-operations-only approach (3/4 completed)
+**Blockers**: None - process running smoothly
+**Expected Completion**: All modules regenerated within 20 minutes

@@ -251,10 +251,45 @@ class ModelAnalyzer:
             analysis = self._analyze_basic_layer(layer_info, batchsize, seqlen, w_dtype_bytes, a_dtype_bytes)
             results.append(analysis)
 
-            # Print progress (only for layers with FLOPs)
+            # Print progress with per-instance values and memory info
             if analysis["flops"] > 0:
-                repeat_str = f" (×{analysis['repeat_count']})" if analysis['repeat_count'] > 1 else ""
-                print(f"  ✓ {analysis['layer_path']}{repeat_str}: {analysis['flops']:,} FLOPs")
+                repeat_count = analysis['repeat_count']
+                # Calculate per-instance values
+                per_instance_flops = analysis['flops'] // repeat_count if repeat_count > 1 else analysis['flops']
+                per_instance_reads = analysis['memory_reads'] // repeat_count if repeat_count > 1 else analysis['memory_reads']
+                per_instance_writes = analysis['memory_writes'] // repeat_count if repeat_count > 1 else analysis['memory_writes']
+                per_instance_intermediates = analysis['memory_intermediates'] // repeat_count if repeat_count > 1 else analysis['memory_intermediates']
+
+                repeat_str = f" (×{repeat_count})" if repeat_count > 1 else ""
+
+                # Format with human-readable units
+                def format_bytes(b):
+                    if b >= 1e9:
+                        return f"{b/1e9:.2f}GB"
+                    elif b >= 1e6:
+                        return f"{b/1e6:.2f}MB"
+                    elif b >= 1e3:
+                        return f"{b/1e3:.2f}KB"
+                    else:
+                        return f"{b}B"
+
+                def format_flops(f):
+                    if f >= 1e12:
+                        return f"{f/1e12:.2f}T"
+                    elif f >= 1e9:
+                        return f"{f/1e9:.2f}G"
+                    elif f >= 1e6:
+                        return f"{f/1e6:.2f}M"
+                    elif f >= 1e3:
+                        return f"{f/1e3:.2f}K"
+                    else:
+                        return f"{f}"
+
+                print(f"  ✓ {analysis['layer_path']}{repeat_str}: "
+                      f"FLOPs={format_flops(per_instance_flops)}, "
+                      f"Reads={format_bytes(per_instance_reads)}, "
+                      f"Writes={format_bytes(per_instance_writes)}, "
+                      f"Intermediates={format_bytes(per_instance_intermediates)}")
 
         # Calculate totals
         total_flops = sum(r["flops"] for r in results)
@@ -337,6 +372,64 @@ def extract_basic_layer_classes(architecture: Dict[str, Any]) -> set[str]:
         traverse(layer)
 
     return classes
+
+
+def extract_all_layer_classes(architecture: Dict[str, Any]) -> set[str]:
+    """
+    Recursively extract ALL unique layer class names from architecture.
+    Includes both basic layers (no sub_layers) and composite layers (with sub_layers).
+
+    Args:
+        architecture: Architecture JSON with layers structure
+
+    Returns:
+        Set of unique class names for all layers (basic + composite)
+    """
+    classes: set[str] = set()
+
+    def traverse(layer: Dict[str, Any]) -> None:
+        # Add this layer's class (whether basic or composite)
+        class_name = layer.get("class", "")
+        if class_name:
+            classes.add(class_name)
+
+        # Recurse into sub_layers if present
+        if "sub_layers" in layer:
+            for sub_layer in layer.get("sub_layers", []):
+                traverse(sub_layer)
+
+    for layer in architecture.get("layers", []):
+        traverse(layer)
+
+    return classes
+
+
+def find_layer_by_class(architecture: Dict[str, Any], class_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Find first layer in architecture matching the given class name.
+
+    Args:
+        architecture: Architecture JSON with layers structure
+        class_name: Full class name to search for
+
+    Returns:
+        Layer dictionary if found, None otherwise
+    """
+    def traverse(layer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if layer.get("class") == class_name:
+            return layer
+        # Recurse into sub_layers if present
+        for sub_layer in layer.get("sub_layers", []):
+            result = traverse(sub_layer)
+            if result:
+                return result
+        return None
+
+    for layer in architecture.get("layers", []):
+        result = traverse(layer)
+        if result:
+            return result
+    return None
 
 
 def main():
@@ -427,10 +520,10 @@ def main():
                 with open(arch_path, 'r') as f:
                     architecture_json = json.load(f)
 
-                # Extract all basic layer classes
-                basic_classes = extract_basic_layer_classes(architecture_json)
+                # Extract all layer classes (both basic and composite)
+                all_classes = extract_all_layer_classes(architecture_json)
                 print(f"\n=== Module Ensure ===")
-                print(f"Found {len(basic_classes)} unique basic layer types in architecture")
+                print(f"Found {len(all_classes)} unique layer types (basic + composite)")
 
                 # Use ModuleAnalyzer to check and generate missing modules
                 module_analyzer = ModuleAnalyzerCore()
@@ -439,8 +532,12 @@ def main():
                 cached = []
                 failed = []
 
-                for class_name in sorted(basic_classes):
+                for class_name in sorted(all_classes):
                     print(f"\nChecking module: {class_name}")
+
+                    # Look up if this module has sub_layers in architecture
+                    layer_info = find_layer_by_class(architecture_json, class_name)
+                    sub_layers = layer_info.get('sub_layers', []) if layer_info else []
 
                     if module_analyzer.is_cached(class_name):
                         print(f"  ✓ Already in database")
@@ -449,7 +546,8 @@ def main():
                         print(f"  → Analyzing with agent...")
                         try:
                             # This will analyze AND generate the module
-                            module_analyzer.analyze_module(class_name, force=False, generate=True)
+                            # Pass sub_layers context for composite module detection
+                            module_analyzer.analyze_module(class_name, force=False, generate=True, sub_layers=sub_layers)
                             print(f"  ✓ Analysis and generation complete")
                             generated.append(class_name)
                         except Exception as e:

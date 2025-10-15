@@ -39,7 +39,7 @@ class ModuleAnalyzerAgent:
         with open(self.examples_path, 'r') as f:
             return json.load(f)
 
-    def analyze_module_with_agent(self, module_spec: str, output_file: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_module_with_agent(self, module_spec: str, output_file: Optional[str] = None, sub_layers: list = None) -> Dict[str, Any]:
         """
         Use Claude Code to analyze a module's forward function for FLOPs and memory.
 
@@ -47,12 +47,13 @@ class ModuleAnalyzerAgent:
             module_spec: Module specification - can be class name or full path
                         (e.g., 'Linear', 'torch.nn.Linear', 'LlamaAttention')
             output_file: Override default output file for this analysis
+            sub_layers: Optional sub-layers from architecture (for composite modules)
 
         Returns:
             Dictionary with analysis results including thinking process, formulas, and functions
         """
         analysis_output_file = output_file or self.output_file
-        prompt = self._create_analysis_prompt(module_spec, analysis_output_file)
+        prompt = self._create_analysis_prompt(module_spec, analysis_output_file, sub_layers)
 
         print("=== PROMPT ===")
         print(prompt)
@@ -117,15 +118,44 @@ class ModuleAnalyzerAgent:
         except Exception as e:
             raise RuntimeError(f"Analysis failed for {module_spec}: {e}")
 
-    def _create_analysis_prompt(self, module_spec: str, output_file: str) -> str:
-        """Create the prompt for Claude Code to analyze a module."""
+    def _create_analysis_prompt(self, module_spec: str, output_file: str, sub_layers: list = None) -> str:
+        """Create the prompt for Claude Code to analyze a module.
+
+        Args:
+            module_spec: Module specification
+            output_file: Output file path
+            sub_layers: Optional sub-layers from architecture (for composite modules)
+        """
         # Load examples to get template structure
         examples = self._load_examples()
         example = examples[1]  # Use the LlamaAttention example as template
         example_json = json.dumps(example, indent=2)
 
+        # Build composite module context if sub_layers provided
+        composite_context = ""
+        if sub_layers:
+            # Extract class names from sub_layers
+            sub_layer_classes = [sl.get('class', 'unknown') for sl in sub_layers]
+            composite_context = f"""
+⚠️ COMPOSITE MODULE DETECTED ⚠️
+
+This module contains these sub-layers (already analyzed separately):
+{json.dumps(sub_layer_classes, indent=2)}
+
+CRITICAL RULE: Count ONLY operations that occur BETWEEN sub-layer calls.
+- ✅ Include: Matmuls, softmax, element-wise ops, residual connections
+- ❌ Exclude: Any computation done by the sub-layers listed above
+- Do NOT use ${{torch.nn.Linear}} or other ${{...}} references for sub-layers above
+
+Example: For LlamaSdpaAttention, count Q@K^T matmul, softmax, scores@V matmul.
+Do NOT count q_proj/k_proj/v_proj/o_proj Linear layers - they're sub-layers.
+
+"""
+
         return f"""
 ultrathink: Analyze the module: {module_spec}
+
+{composite_context}
 
 GOAL: Calculate the FLOPs and memory read/write volumes when calling forward() on this module
 
