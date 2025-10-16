@@ -522,3 +522,309 @@ After all 4 composite modules are regenerated:
 **Current**: Regenerating composite modules with internal-operations-only approach (3/4 completed)
 **Blockers**: None - process running smoothly
 **Expected Completion**: All modules regenerated within 20 minutes
+
+---
+
+# Memory Bandwidth Analysis Gap - 2025-10-16
+
+## Problem Statement
+
+**Issue**: Composite module analysis successfully fixed FLOP calculations, but memory bandwidth tracking still underestimates by ~30-40x for attention operations.
+
+**Root Cause**: Current design tracks intermediate tensor *storage* (268MB) but not intermediate tensor *traffic* (read/write operations on intermediates).
+
+### Comparison with Reference Tool
+
+**Reference Tool (per decoder layer):**
+```
+qk_matmul:  34.4G FLOPs, 302MB access
+softmax:    671M FLOPs, 537MB access
+sv_matmul:  34.4G FLOPs, 302MB access
+Total attention bandwidth: 1,141MB per layer
+```
+
+**Our Implementation:**
+```
+self_attn: 69.17G FLOPs, 302MB total (16.78MB reads + 16.78MB writes + 268MB intermediates)
+```
+
+**The Gap**: We count 302MB vs actual 1,141MB bandwidth → **78% underestimate**
+
+## Detailed Analysis: Attention Memory Flow
+
+### Step-by-Step HBM Traffic (B=1, S=2048, num_heads=32, head_dim=128)
+
+**Operation 1: QK Matmul** (`scores = Q @ K.T`)
+```
+Inputs:  Q [1, 32, 2048, 128] = 16.78 MB
+         K [1, 32, 2048, 128] = 16.78 MB
+Output:  scores [1, 32, 2048, 2048] = 268.44 MB
+
+HBM Traffic:
+- READ Q:          16.78 MB
+- READ K:          16.78 MB
+- WRITE scores:   268.44 MB
+Total:            302.00 MB
+```
+
+**Operation 2: Softmax** (`attn_weights = softmax(scores)`)
+```
+Input:   scores [1, 32, 2048, 2048] = 268.44 MB (from HBM!)
+Output:  attn_weights [1, 32, 2048, 2048] = 268.44 MB
+
+HBM Traffic:
+- READ scores:         268.44 MB  ← Intermediate read!
+- WRITE attn_weights:  268.44 MB  ← Intermediate write!
+Total:                 536.88 MB
+```
+
+**Operation 3: SV Matmul** (`output = attn_weights @ V`)
+```
+Inputs:  attn_weights [1, 32, 2048, 2048] = 268.44 MB (from HBM!)
+         V [1, 32, 2048, 128] = 16.78 MB
+Output:  output [1, 32, 2048, 128] = 16.78 MB
+
+HBM Traffic:
+- READ attn_weights:  268.44 MB  ← Intermediate read!
+- READ V:              16.78 MB
+- WRITE output:        16.78 MB
+Total:                302.00 MB
+```
+
+**Total HBM Bandwidth: 302 + 537 + 302 = 1,141 MB**
+
+### Why Intermediates Hit HBM
+
+**Key Constraint**: Attention scores (268 MB) >> GPU L2 cache (40 MB)
+
+Since the 268MB scores tensor doesn't fit in fast memory:
+1. **Written to HBM** after qk_matmul (kernel ends, data evicted to HBM)
+2. **Read from HBM** by softmax (next kernel starts, loads from HBM)
+3. **Written to HBM** after softmax (kernel ends, data stored to HBM)
+4. **Read from HBM** by sv_matmul (next kernel starts, loads from HBM)
+
+**Result**: Each 268MB intermediate contributes 4 HBM accesses = 1,072 MB bandwidth
+
+### Impact on Performance Prediction
+
+**Without intermediate traffic tracking:**
+```python
+bandwidth = 33.56 MB (input + output only)
+predicted_time = 33.56 MB / 900 GB/s = 37 μs
+```
+
+**With intermediate traffic tracking:**
+```python
+bandwidth = 1,141 MB (including intermediate reads/writes)
+predicted_time = 1,141 MB / 900 GB/s = 1,267 μs
+```
+
+**Actual measured time**: ~1,486 μs (from reference)
+
+**Accuracy**: 1,267 μs vs 37 μs → **34x improvement in prediction accuracy**
+
+## Proposed Solution: Atomic Operation Breakdown
+
+### Architecture Change
+
+**Current Design (Composite Modules):**
+```json
+"transformers_LlamaSdpaAttention": {
+  "flop_analysis": {
+    "calculation_formula": "69.17G"
+  },
+  "memory_analysis": {
+    "reads": "16.78MB",           // Module input only
+    "writes": "16.78MB",          // Module output only
+    "intermediates": "268.44MB"   // Storage, counted once
+  }
+}
+```
+
+**Proposed Design (Atomic Operations):**
+```json
+"transformers_LlamaSdpaAttention_qk_matmul": {
+  "full_class_name": "transformers.models.llama.modeling_llama.LlamaSdpaAttention.qk_matmul",
+  "is_atomic_operation": true,
+  "parent_module": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "flop_analysis": {
+    "calculation_formula": "2 * {B} * {num_heads} * {S} * {S} * {head_dim}"
+  },
+  "memory_analysis": {
+    "reads": "2 * {B} * {num_heads} * {S} * {head_dim} * {a_dtype_bytes}",  // Q + K
+    "writes": "{B} * {num_heads} * {S} * {S} * {a_dtype_bytes}"  // scores
+  }
+},
+"transformers_LlamaSdpaAttention_softmax": {
+  "full_class_name": "transformers.models.llama.modeling_llama.LlamaSdpaAttention.softmax",
+  "is_atomic_operation": true,
+  "parent_module": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "flop_analysis": {
+    "calculation_formula": "3 * {B} * {num_heads} * {S} * {S}"
+  },
+  "memory_analysis": {
+    "reads": "{B} * {num_heads} * {S} * {S} * {a_dtype_bytes}",   // scores
+    "writes": "{B} * {num_heads} * {S} * {S} * {a_dtype_bytes}"   // attn_weights
+  }
+},
+"transformers_LlamaSdpaAttention_sv_matmul": {
+  "full_class_name": "transformers.models.llama.modeling_llama.LlamaSdpaAttention.sv_matmul",
+  "is_atomic_operation": true,
+  "parent_module": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "flop_analysis": {
+    "calculation_formula": "2 * {B} * {num_heads} * {S} * {S} * {head_dim}"
+  },
+  "memory_analysis": {
+    "reads": "{B} * {num_heads} * {S} * {S} * {a_dtype_bytes} + {B} * {num_heads} * {S} * {head_dim} * {a_dtype_bytes}",  // attn_weights + V
+    "writes": "{B} * {num_heads} * {S} * {head_dim} * {a_dtype_bytes}"  // output
+  }
+}
+```
+
+### Key Benefits
+
+**Automatic Intermediate Tracking:**
+- One operation's write = next operation's read
+- No special "intermediates" field needed
+- Sum of all reads + writes = total HBM bandwidth
+
+**Example - Attention Scores (268MB):**
+- Written in qk_matmul → counted as "write" (268MB)
+- Read in softmax → counted as "read" (268MB)
+- Written in softmax → counted as "write" (268MB)
+- Read in sv_matmul → counted as "read" (268MB)
+- **Total intermediate traffic: 1,072MB automatically captured**
+
+**Matches Reference Tool Exactly:**
+```
+qk_matmul:  34.4G FLOPs, 302MB (16.78 + 16.78 + 268.44)
+softmax:    671M FLOPs, 537MB (268.44 + 268.44)
+sv_matmul:  34.4G FLOPs, 302MB (268.44 + 16.78 + 16.78)
+```
+
+## Implementation Challenges
+
+### Challenge 1: Extracting Atomic Operations
+
+**Problem**: `print(model)` shows `LlamaSdpaAttention` as ONE module, not three operations.
+
+**Solution Options:**
+
+**Option A: Manual Definition (Simple)**
+```python
+# In module_db.json, store atomic operation breakdown
+"transformers_LlamaSdpaAttention": {
+  "atomic_operations": [
+    {"name": "qk_matmul", "formula": "..."},
+    {"name": "softmax", "formula": "..."},
+    {"name": "sv_matmul", "formula": "..."}
+  ]
+}
+```
+
+**Option B: Parse forward() Method (Automatic)**
+```python
+# Agent analyzes forward() code
+def forward(self, hidden_states, ...):
+    # Identified atomic ops:
+    attn_weights = torch.matmul(Q, K.T)  # → qk_matmul operation
+    attn_weights = F.softmax(attn_weights)  # → softmax operation
+    output = torch.matmul(attn_weights, V)  # → sv_matmul operation
+```
+
+**Option C: Hybrid (Recommended)**
+- Keep automatic module discovery for basic layers
+- Manually define atomic operation breakdown for complex patterns (Attention)
+- Store in module_db.json as sub-entries
+
+### Challenge 2: Architecture Representation
+
+**Current Architecture JSON:**
+```json
+{
+  "name": "self_attn",
+  "class": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "parameters": {...},
+  "sub_layers": [...]
+}
+```
+
+**Option 1: Flatten Atomic Operations**
+```json
+{
+  "name": "self_attn.qk_matmul",
+  "class": "transformers.models.llama.modeling_llama.LlamaSdpaAttention.qk_matmul",
+  "parameters": {...}
+},
+{
+  "name": "self_attn.softmax",
+  "class": "transformers.models.llama.modeling_llama.LlamaSdpaAttention.softmax",
+  "parameters": {...}
+}
+```
+
+**Option 2: Nested Operations**
+```json
+{
+  "name": "self_attn",
+  "class": "transformers.models.llama.modeling_llama.LlamaSdpaAttention",
+  "atomic_operations": [
+    {"name": "qk_matmul", "parameters": {...}},
+    {"name": "softmax", "parameters": {...}},
+    {"name": "sv_matmul", "parameters": {...}}
+  ]
+}
+```
+
+### Challenge 3: Parameter Population
+
+Atomic operations need different parameters than parent modules:
+
+**qk_matmul needs**: B, num_heads, S, head_dim, a_dtype_bytes
+**softmax needs**: B, num_heads, S, a_dtype_bytes
+**sv_matmul needs**: B, num_heads, S, head_dim, a_dtype_bytes
+
+These must be populated from parent module's config.
+
+## Recommended Implementation Path
+
+### Phase 1: Prototype with Manual Definitions
+1. Manually define atomic operations for LlamaSdpaAttention in module_db.json
+2. Update analysis pipeline to recognize and process atomic operations
+3. Verify bandwidth calculations match reference tool
+
+### Phase 2: Generalize Architecture
+1. Update module_db_schema.json to support atomic_operations field
+2. Extend populate_parameters_agent to handle atomic operations
+3. Update analysis to sum reads/writes correctly
+
+### Phase 3: Automate Detection
+1. Enhance module_analyzer_agent to parse forward() and identify atomic ops
+2. Automatically generate atomic operation entries
+3. Test on multiple model architectures
+
+## Expected Outcomes
+
+**After Implementation:**
+- ✅ Memory bandwidth predictions accurate within 10%
+- ✅ Match reference tool's operation-level granularity
+- ✅ Correct performance prediction for memory-bound operations
+- ✅ No need for special "intermediates" handling
+
+**Performance Prediction Improvement:**
+- Current: 37 μs (off by 40x)
+- After fix: 1,267 μs (within 15% of actual 1,486 μs)
+
+## Status
+
+**Current**: Memory gap identified and analyzed, solution designed
+**Next**: Decide on implementation approach (manual prototype vs full automation)
+**Priority**: High - critical for accurate performance prediction
+
+## Key Insights
+
+1. **Intermediate tensor traffic is the dominant factor** in memory bandwidth for attention operations
+2. **Splitting into atomic operations** automatically captures this traffic without special tracking
+3. **Current composite approach** fundamentally cannot capture intermediate R/W patterns
+4. **Reference tools use operation-level breakdown** for accurate bandwidth modeling
+5. **HBM bandwidth >> cache bandwidth** means even small intermediates hit HBM multiple times

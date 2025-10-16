@@ -126,33 +126,44 @@ class ModelAnalyzer:
 
         return enhanced_str
 
-    def _extract_basic_layers_from_json(self, layers, parent_path="", repeat_multiplier=1):
-        """Extract all basic layers from JSON structure with repeat handling."""
-        basic_layers = []
+    def _extract_all_layers_with_parameters_from_json(self, layers, parent_path="", repeat_multiplier=1):
+        """
+        Extract all layers (basic and composite) that have parameters populated.
+
+        Both basic layers (no sub_layers) and composite layers (with sub_layers)
+        may have parameters if they perform computation. This includes:
+        - Basic layers: Linear, Embedding, SiLU, RMSNorm, etc.
+        - Composite layers with internal ops: LlamaDecoderLayer (residuals),
+          LlamaMLP (element-wise multiply), LlamaSdpaAttention (attention matmuls)
+        """
+        layers_with_params = []
 
         for layer in layers:
             current_repeat = repeat_multiplier * layer.get("repeat", 1)
             current_path = f"{parent_path}.{layer['name']}" if parent_path else layer['name']
 
-            if "sub_layers" not in layer:  # This is a basic layer
-                basic_layers.append({
+            # Include this layer if it has parameters (basic OR composite)
+            if "parameters" in layer and layer["parameters"]:
+                layers_with_params.append({
                     "name": layer["name"],
                     "class": layer["class"],
-                    "parameters": layer.get("parameters", {}),
+                    "parameters": layer["parameters"],
                     "path": current_path,
                     "repeat": current_repeat
                 })
-            else:  # Composite layer - recurse into sub_layers
-                basic_layers.extend(
-                    self._extract_basic_layers_from_json(
+
+            # Always recurse into sub_layers if present
+            if "sub_layers" in layer:
+                layers_with_params.extend(
+                    self._extract_all_layers_with_parameters_from_json(
                         layer["sub_layers"], current_path, current_repeat
                     )
                 )
 
-        return basic_layers
+        return layers_with_params
 
-    def _analyze_basic_layer(self, layer_info, batch_size, seq_len, w_dtype_bytes, a_dtype_bytes):
-        """Analyze a single basic layer using registry."""
+    def _analyze_layer(self, layer_info, batch_size, seq_len, w_dtype_bytes, a_dtype_bytes):
+        """Analyze a single layer (basic or composite) using registry."""
         from generated_modules.registry import compute_flops, compute_memory
 
         # Substitute dynamic parameters in layer parameters
@@ -237,18 +248,18 @@ class ModelAnalyzer:
         except FileNotFoundError:
             raise FileNotFoundError(f"Model JSON not found: {self.model_json_path}")
 
-        # Extract all basic layers from JSON
-        basic_layers = self._extract_basic_layers_from_json(model_structure["layers"])
+        # Extract all layers with parameters (basic + composite) from JSON
+        layers_to_analyze = self._extract_all_layers_with_parameters_from_json(model_structure["layers"])
 
-        print(f"\nAnalyzing {len(basic_layers)} basic layers:")
+        print(f"\nAnalyzing {len(layers_to_analyze)} layers (basic + composite):")
 
-        # Analyze each basic layer
+        # Analyze each layer
         w_dtype_bytes = w_bit // 8
         a_dtype_bytes = a_bit // 8
         results = []
 
-        for layer_info in basic_layers:
-            analysis = self._analyze_basic_layer(layer_info, batchsize, seqlen, w_dtype_bytes, a_dtype_bytes)
+        for layer_info in layers_to_analyze:
+            analysis = self._analyze_layer(layer_info, batchsize, seqlen, w_dtype_bytes, a_dtype_bytes)
             results.append(analysis)
 
             # Print progress with per-instance values and memory info
@@ -324,7 +335,7 @@ class ModelAnalyzer:
                 }
             },
             "json_based_results": {
-                "basic_layer_analyses": results,
+                "layer_analyses": results,
                 "totals": {
                     "flops": total_flops,
                     "memory_reads": total_memory_reads,
