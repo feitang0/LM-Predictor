@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "class_name",
+    "kernels"
+  ],
+  "properties": {
+    "class_name": {
+      "type": "string",
+      "description": "Fully qualified class name (e.g., torch.nn.modules.linear.Linear)"
+    },
+    "kernels": {
+      "type": "array",
+      "description": "List of compute/memory intensive operations",
+      "items": {
+        "type": "object",
+        "required": [
+          "kernel_type",
+          "operation",
+          "analysis",
+          "flops",
+          "memory_access"
+        ],
+        "properties": {
+          "kernel_type": {
+            "type": "string",
+            "enum": [
+              "direct_operation",
+              "module_call"
+            ],
+            "description": "Whether this is a direct tensor op or a sub-module call"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Human-readable description of what this kernel does"
+          },
+          "analysis": {
+            "type": "string",
+            "description": "Detailed analysis of the flops and memory access calculation"
+          },
+          "flops": {
+            "type": "string",
+            "description": "FLOPs formula using {param} syntax (e.g., '2 * {batch_size} * {seq_len} * {hidden_size}')"
+          },
+          "memory_access": {
+            "type": "object",
+            "required": [
+              "read",
+              "write"
+            ],
+            "properties": {
+              "read": {
+                "type": "string",
+                "description": "Read formula using {param} syntax"
+              },
+              "write": {
+                "type": "string",
+                "description": "Write formula using {param} syntax"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
