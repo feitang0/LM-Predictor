@@ -1,0 +1,15 @@
+{
+  "class_name": "torch.nn.modules.linear.Linear",
+  "kernels": [
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Linear transformation (matrix multiplication + bias addition)",
+      "analysis": "The forward method calls F.linear(input, self.weight, self.bias) which performs a single linear transformation operation. Input has shape (batch_size, seq_len, in_features), weight has shape (out_features, in_features), and output has shape (batch_size, seq_len, out_features). The operation computes: output = input @ self.weight.T + self.bias. This is implemented as a single optimized kernel in PyTorch's backend.",
+      "flops": "2 * {batch_size} * {seq_len} * {in_features} * {out_features} + {batch_size} * {seq_len} * {out_features}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {in_features} * {a_bytes} + {out_features} * {in_features} * {w_bytes} + {out_features} * {w_bytes}",
+        "write": "{batch_size} * {seq_len} * {out_features} * {a_bytes}"
+      }
+    }
+  ]
+}

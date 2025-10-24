@@ -50,6 +50,8 @@ Analyze the forward() method of {module_name}, extract all compute/memory intens
 - Transformers library source: `{transformers_dir}`
 - PyTorch library source: `{pytorch_dir}`
 
+**IMPORTANT**: If you cannot find the source code for {module_name} in the available resources above, STOP immediately. Write the reason why you cannot find it in SCRATCHPAD.md and do NOT proceed with assumptions or hypothetical analysis.
+
 ## Analysis Guidelines
 
 ### Inference Stage Configuration
@@ -206,6 +208,9 @@ Follow this TODO list systematically. Mark each item as you complete it.
 ### Phase 1: Scratchpad Analysis (SCRATCHPAD.md)
 
 1. [ ] Find and read the forward() method source code for {module_name}
+   - If you cannot find the source code in the available resources, STOP here
+   - Write in SCRATCHPAD.md why you cannot find it (e.g., "Module not found in provided directories")
+   - Do NOT proceed with assumptions or hypothetical analysis
 2. [ ] Identify the default inference path (skip training/special config branches)
 3. [ ] List all variables and their dimensions/shapes used in the method
 4. [ ] Go through the code line by line, noting actual line numbers from the source
@@ -249,7 +254,8 @@ Follow this TODO list systematically. Mark each item as you complete it.
             permission_mode="acceptEdits",
             # model="haiku",
             model="sonnet",
-            # cwd=working_dir,
+            cwd=working_dir,
+            add_dirs=[transformers_dir, pytorch_dir],
             agents={},
         ),
     ):

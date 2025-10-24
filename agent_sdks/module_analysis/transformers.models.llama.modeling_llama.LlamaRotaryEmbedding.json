@@ -1,0 +1,75 @@
+{
+  "class_name": "transformers.models.llama.modeling_llama.LlamaRotaryEmbedding",
+  "kernels": [
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Expand inverse frequencies tensor",
+      "analysis": "Expand self.inv_freq from shape [dim // 2] to [batch_size, dim // 2, 1] using broadcasting. This is a view operation with no actual computation, just memory layout changes.",
+      "flops": "0",
+      "memory_access": {
+        "read": "{dim // 2} * {a_bytes}",
+        "write": "{batch_size} * {dim // 2} * 1 * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Expand position IDs tensor",
+      "analysis": "Expand position_ids from shape [batch_size, seq_len] to [batch_size, 1, seq_len] and convert to float32. This is a view operation with type conversion.",
+      "flops": "0",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {a_bytes}",
+        "write": "{batch_size} * 1 * {seq_len} * 4"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Matrix multiplication and transpose",
+      "analysis": "Multiply inv_freq_expanded [batch_size, dim // 2, 1] with position_ids_expanded [batch_size, 1, seq_len] to get freqs [batch_size, dim // 2, seq_len], then transpose to [batch_size, seq_len, dim // 2]. Matrix multiplication requires 2 FLOPs per multiply-add operation.",
+      "flops": "{batch_size} * {dim // 2} * {seq_len} * 2",
+      "memory_access": {
+        "read": "{batch_size} * {dim // 2} * 1 * 4 + {batch_size} * 1 * {seq_len} * 4",
+        "write": "{batch_size} * {dim // 2} * {seq_len} * 4"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Tensor concatenation",
+      "analysis": "Concatenate freqs tensor [batch_size, seq_len, dim // 2] with itself along the last dimension to create emb [batch_size, seq_len, dim]. This duplicates the frequency values.",
+      "flops": "0",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {dim // 2} * 4",
+        "write": "{batch_size} * {seq_len} * {dim} * 4"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Element-wise cosine computation",
+      "analysis": "Compute cosine of each element in emb tensor [batch_size, seq_len, dim]. Trigonometric functions typically require 10-20 FLOPs per element; using conservative estimate of 10 FLOPs per element.",
+      "flops": "{batch_size} * {seq_len} * {dim} * 10",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {dim} * 4",
+        "write": "{batch_size} * {seq_len} * {dim} * 4"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Element-wise sine computation",
+      "analysis": "Compute sine of each element in emb tensor [batch_size, seq_len, dim]. Trigonometric functions typically require 10-20 FLOPs per element; using conservative estimate of 10 FLOPs per element.",
+      "flops": "{batch_size} * {seq_len} * {dim} * 10",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {dim} * 4",
+        "write": "{batch_size} * {seq_len} * {dim} * 4"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Type conversion back to input dtype",
+      "analysis": "Convert cos and sin tensors from float32 back to the original input dtype (typically bfloat16). Both tensors have shape [batch_size, seq_len, dim].",
+      "flops": "0",
+      "memory_access": {
+        "read": "2 * {batch_size} * {seq_len} * {dim} * 4",
+        "write": "2 * {batch_size} * {seq_len} * {dim} * {a_bytes}"
+      }
+    }
+  ]
+}

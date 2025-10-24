@@ -1,0 +1,105 @@
+{
+  "class_name": "transformers.models.llama.modeling_llama.LlamaAttention",
+  "kernels": [
+    {
+      "kernel_type": "module_call",
+      "operation": "Query projection through linear layer",
+      "analysis": "The q_proj module is a Linear layer that projects from hidden_size to num_heads * head_dim. Input shape: (batch_size, seq_len, hidden_size), output shape: (batch_size, seq_len, num_heads * head_dim).",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim})"
+      }
+    },
+    {
+      "kernel_type": "module_call",
+      "operation": "Key projection through linear layer",
+      "analysis": "The k_proj module is a Linear layer that projects from hidden_size to num_key_value_heads * head_dim. Input shape: (batch_size, seq_len, hidden_size), output shape: (batch_size, seq_len, num_key_value_heads * head_dim).",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})"
+      }
+    },
+    {
+      "kernel_type": "module_call",
+      "operation": "Value projection through linear layer",
+      "analysis": "The v_proj module is a Linear layer that projects from hidden_size to num_key_value_heads * head_dim. Input shape: (batch_size, seq_len, hidden_size), output shape: (batch_size, seq_len, num_key_value_heads * head_dim).",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {num_key_value_heads}, {head_dim})"
+      }
+    },
+    {
+      "kernel_type": "module_call",
+      "operation": "Compute rotary positional embeddings",
+      "analysis": "The rotary_emb module computes cosine and sine embeddings for rotary positional encoding. Input shape: (batch_size, num_key_value_heads, seq_len, head_dim), output shapes: (batch_size, seq_len, head_dim) for both cos and sin.",
+      "flops": "${transformers.models.llama.modeling_llama.LlamaRotaryEmbedding}({batch_size}, {num_key_value_heads}, {seq_len}, {head_dim})",
+      "memory_access": {
+        "read": "${transformers.models.llama.modeling_llama.LlamaRotaryEmbedding}({batch_size}, {num_key_value_heads}, {seq_len}, {head_dim})",
+        "write": "${transformers.models.llama.modeling_llama.LlamaRotaryEmbedding}({batch_size}, {num_key_value_heads}, {seq_len}, {head_dim})"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Apply rotary positional embeddings to query and key states",
+      "analysis": "Applies RoPE transformation to both query and key states. For query: shape (batch_size, num_heads, seq_len, head_dim), for key: shape (batch_size, num_key_value_heads, seq_len, head_dim). Each requires 3 element-wise operations per element: multiplication, rotation, multiplication, and addition.",
+      "flops": "3 * {batch_size} * {seq_len} * {head_dim} * ({num_heads} + {num_key_value_heads})",
+      "memory_access": {
+        "read": "{batch_size} * {num_heads} * {seq_len} * {head_dim} * {a_bytes} + {batch_size} * {num_key_value_heads} * {seq_len} * {head_dim} * {a_bytes} + 2 * {batch_size} * {seq_len} * {head_dim} * {a_bytes}",
+        "write": "{batch_size} * {num_heads} * {seq_len} * {head_dim} * {a_bytes} + {batch_size} * {num_key_value_heads} * {seq_len} * {head_dim} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Compute attention scores with scaling",
+      "analysis": "Matrix multiplication between query_states (batch_size, num_heads, seq_len, head_dim) and transposed key_states (batch_size, num_heads, cache_len, head_dim), followed by element-wise division by sqrt(head_dim). Output shape: (batch_size, num_heads, seq_len, cache_len).",
+      "flops": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * (2 * {head_dim} + 1)",
+      "memory_access": {
+        "read": "{batch_size} * {num_heads} * {seq_len} * {head_dim} * {a_bytes} + {batch_size} * {num_heads} * {cache_len} * {head_dim} * {a_bytes} + {batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}",
+        "write": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Apply attention mask",
+      "analysis": "Element-wise addition of causal mask to attention weights. Both tensors have shape (batch_size, num_heads, seq_len, cache_len).",
+      "flops": "{batch_size} * {num_heads} * {seq_len} * {cache_len}",
+      "memory_access": {
+        "read": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes} + {batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}",
+        "write": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Softmax computation",
+      "analysis": "Softmax computation on the last dimension of attention weights. Shape: (batch_size, num_heads, seq_len, cache_len). Involves max reduction, exp computation, sum reduction, and division operations.",
+      "flops": "4 * {batch_size} * {num_heads} * {seq_len} * {cache_len}",
+      "memory_access": {
+        "read": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}",
+        "write": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Compute attention output",
+      "analysis": "Matrix multiplication between attention weights (batch_size, num_heads, seq_len, cache_len) and value_states (batch_size, num_heads, cache_len, head_dim). Output shape: (batch_size, num_heads, seq_len, head_dim).",
+      "flops": "2 * {batch_size} * {num_heads} * {seq_len} * {cache_len} * {head_dim}",
+      "memory_access": {
+        "read": "{batch_size} * {num_heads} * {seq_len} * {cache_len} * {a_bytes} + {batch_size} * {num_heads} * {cache_len} * {head_dim} * {a_bytes}",
+        "write": "{batch_size} * {num_heads} * {seq_len} * {head_dim} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "module_call",
+      "operation": "Output projection through linear layer",
+      "analysis": "The o_proj module is a Linear layer that projects from hidden_size to hidden_size. Input shape: (batch_size, seq_len, hidden_size), output shape: (batch_size, seq_len, hidden_size).",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {hidden_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {hidden_size})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {hidden_size})"
+      }
+    }
+  ]
+}

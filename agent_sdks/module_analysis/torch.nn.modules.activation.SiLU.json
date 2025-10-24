@@ -1,0 +1,15 @@
+{
+  "class_name": "torch.nn.modules.activation.SiLU",
+  "kernels": [
+    {
+      "kernel_type": "direct_operation",
+      "operation": "SiLU activation function",
+      "analysis": "The SiLU operation performs element-wise computation: x * sigmoid(x). The sigmoid function requires 4 operations per element: negation (-x), exponential (exp(-x)), addition (1 + exp(-x)), and division (1 / (1 + exp(-x))). Then element-wise multiplication adds 1 more operation per element. Total: 5 FLOPs per element. The input tensor has shape (batch_size, seq_len, hidden_size) with num_elements = batch_size * seq_len * hidden_size.",
+      "flops": "5 * {batch_size} * {seq_len} * {hidden_size}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}"
+      }
+    }
+  ]
+}

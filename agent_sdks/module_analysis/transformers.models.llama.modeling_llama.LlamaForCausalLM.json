@@ -1,0 +1,45 @@
+{
+  "class_name": "transformers.models.llama.modeling_llama.LlamaForCausalLM",
+  "kernels": [
+    {
+      "kernel_type": "module_call",
+      "operation": "Main transformer model forward pass",
+      "analysis": "Calls LlamaModel.forward() which contains all transformer layers, attention mechanisms, and MLP computations. This is the main computational component of the model.",
+      "flops": "${transformers.models.llama.modeling_llama.LlamaModel}({batch_size}, {seq_len}, {cache_len}, {hidden_size}, {num_heads}, {num_key_value_heads}, {intermediate_size})",
+      "memory_access": {
+        "read": "${transformers.models.llama.modeling_llama.LlamaModel}({batch_size}, {seq_len}, {cache_len}, {hidden_size}, {num_heads}, {num_key_value_heads}, {intermediate_size})",
+        "write": "${transformers.models.llama.modeling_llama.LlamaModel}({batch_size}, {seq_len}, {cache_len}, {hidden_size}, {num_heads}, {num_key_value_heads}, {intermediate_size})"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Extract hidden states from model outputs",
+      "analysis": "Simple tensor indexing operation to extract the last hidden states from the model outputs tuple. No arithmetic computation.",
+      "flops": "0",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "module_call",
+      "operation": "Language modeling head projection",
+      "analysis": "Linear layer that projects the final hidden states from hidden_size to vocab_size to produce logits for token prediction.",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})"
+      }
+    },
+    {
+      "kernel_type": "direct_operation",
+      "operation": "Float conversion of logits",
+      "analysis": "Convert logits from their current dtype to float32 for numerical stability. This is a data type conversion operation with no arithmetic computation.",
+      "flops": "0",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {vocab_size} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {vocab_size} * {a_bytes}"
+      }
+    }
+  ]
+}
