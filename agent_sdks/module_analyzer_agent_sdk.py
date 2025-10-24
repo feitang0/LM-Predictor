@@ -30,17 +30,11 @@ DISALLOWED_TOOLS: Final[list[str]] = [
 ]
 
 
-async def module_analyze(module_name: str, working_dir: str) -> None:
+async def module_analyze(module_name: str, working_dir: str, transformers_dir: str, pytorch_dir: str) -> None:
     analysis_file = "module_analysis.json"
     analysis_file_path = Path(f"{working_dir}/{analysis_file}")
     analysis_schema_file = "module_analysis_schema.json"
     scratchpad_file_path = Path(f"{working_dir}/SCRATCHPAD.md")
-
-    module_parts = module_name.split(".")
-    obj = eval(module_parts[0])
-    for part in module_parts[1:]:
-        obj = getattr(obj, part)
-    module_forward_code_str = inspect.getsource(obj.forward)
 
     if analysis_file_path.exists():
         analysis_file_path.unlink()
@@ -51,11 +45,10 @@ async def module_analyze(module_name: str, working_dir: str) -> None:
 
 Analyze the forward() method of {module_name}, extract all compute/memory intensive kernels, and quantitatively analyze the FLOPs and Memory Access volumes of each kernel.
 
-## Forward Method Source Code
+## Available Resources
 
-```python
-{module_forward_code_str}
-```
+- Transformers library source: `{transformers_dir}`
+- PyTorch library source: `{pytorch_dir}`
 
 ## Analysis Guidelines
 
@@ -115,15 +108,16 @@ You can add the variables as needed, but USE these variables to express the form
 - Non-default configuration branches (e.g., `if pretraining_tp > 1`)
 
 **Module Calls vs Direct Operations**:
-- **Module calls** (e.g., `self.linear(x)`, `self.layer_norm(x)`): These will be analyzed independently in their own module analysis. Reference them using the format: `${{module_name}}({{parameters}})` where parameters are the standardized variables needed for that module's calculation.
+- **Module calls** (e.g., `self.linear(x)`, `self.layer_norm(x)`): These will be analyzed independently in their own module analysis. Reference them using the format: `${{fully.qualified.ClassName}}({{parameters}})` where parameters are the standardized variables needed for that module's calculation.
 - **Direct operations** (e.g., `x + y`, `torch.matmul(a, b)`): Calculate FLOPs and memory directly using formulas.
 
-**How to use ${{module_name}}(parameters) format**:
-- For module calls, use `${{module_name}}(param1, param2, ...)` to represent the FLOPs/Memory that will be calculated by that module
-- `module_name` should match the attribute name (e.g., `q_proj`, `layer_norm`, `gate_proj`)
+**How to use ${{fully.qualified.ClassName}}(parameters) format**:
+- For module calls, use `${{fully.qualified.ClassName}}(param1, param2, ...)` to represent the FLOPs/Memory that will be calculated by that module
+- `fully.qualified.ClassName` should be the complete Python import path (e.g., `torch.nn.modules.linear.Linear`, `transformers.models.llama.modeling_llama.LlamaRMSNorm`)
+- You need to determine the actual class type of each module (e.g., `self.q_proj` might be a `torch.nn.modules.linear.Linear`)
 - Include all relevant parameters needed for the module's calculation (e.g., dimensions, batch_size, seq_len)
 - If a line has both module calls AND direct operations, sum them together:
-  - Example: `${{module}}(params) + direct_operation_flops`
+  - Example: `${{fully.qualified.Class}}(params) + direct_operation_flops`
 - This allows tracking which modules contribute to each line's total cost
 
 **Format for each analyzed line**:
@@ -148,20 +142,20 @@ Example 1 - Module call without additional operations:
 Line 342: query_states = self.q_proj(hidden_states)
 ```
 - Operation: Query projection through linear layer
-- Analysis: The q_proj module will be analyzed independently. Reference the module with its input parameters. The hidden_states has shape (batch_size, seq_len, hidden_size), and q_proj projects to (batch_size, seq_len, num_heads * head_dim).
-- FLOPs: ${{q_proj}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
-- Memory Access: ${{q_proj}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
+- Analysis: The q_proj module is a Linear layer and will be analyzed independently. Reference the module with its fully qualified class name and input parameters. The hidden_states has shape (batch_size, seq_len, hidden_size), and q_proj projects to (batch_size, seq_len, num_heads * head_dim).
+- FLOPs: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
+- Memory Access: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
 
 Example 2 - Module call WITH additional operations:
 ```
 Line 389: hidden_states = self.layer_norm(hidden_states) + residual
 ```
 - Operation: Layer normalization followed by element-wise addition with residual
-- Analysis: The layer_norm module will be analyzed independently. Here we count both the module reference and the element-wise addition. The output tensor has shape (batch_size, seq_len, hidden_size), requiring batch_size * seq_len * hidden_size additions for the residual connection.
-- FLOPs: ${{layer_norm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size
+- Analysis: The layer_norm module (e.g., LlamaRMSNorm) will be analyzed independently. Here we count both the module reference and the element-wise addition. The output tensor has shape (batch_size, seq_len, hidden_size), requiring batch_size * seq_len * hidden_size additions for the residual connection.
+- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size
 - Memory Access:
-  - Read: ${{layer_norm}}(batch_size, seq_len, hidden_size) + 2 * batch_size * seq_len * hidden_size * a_bytes
-  - Write: ${{layer_norm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size * a_bytes
+  - Read: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + 2 * batch_size * seq_len * hidden_size * a_bytes
+  - Write: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size * a_bytes
 
 Example 3 - Direct tensor operation:
 ```
@@ -178,16 +172,16 @@ Line 156: output = self.output_proj(self.dropout(self.activation(self.input_proj
 ```
 - Operation: Element-wise addition between dropout output and skip connection, then output projection
 - Analysis: Break down what happens in THIS module:
-  - self.input_proj(x): module call → reference as ${{input_proj}}(...)
-  - self.activation(...): module call → reference as ${{activation}}(...)
-  - self.dropout(...): module call → reference as ${{dropout}}(...)
-  - Addition (+): direct operation → COUNT IT (batch_size * seq_len * hidden_size)
-  - self.output_proj(...): module call → reference as ${{output_proj}}(...)
-  Both operands for addition have shape (batch_size, seq_len, hidden_size).
-- FLOPs: ${{input_proj}}(batch_size, seq_len, hidden_size, intermediate_size) + ${{activation}}(batch_size, seq_len, intermediate_size) + ${{dropout}}(batch_size, seq_len, intermediate_size) + batch_size * seq_len * intermediate_size + ${{output_proj}}(batch_size, seq_len, intermediate_size, hidden_size)
+  - self.input_proj(x): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(...)
+  - self.activation(...): SiLU activation → reference as ${{torch.nn.modules.activation.SiLU}}(...)
+  - self.dropout(...): Dropout layer → reference as ${{torch.nn.modules.dropout.Dropout}}(...)
+  - Addition (+): direct operation → COUNT IT (batch_size * seq_len * intermediate_size)
+  - self.output_proj(...): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(...)
+  Both operands for addition have shape (batch_size, seq_len, intermediate_size).
+- FLOPs: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, intermediate_size) + ${{torch.nn.modules.activation.SiLU}}(batch_size, seq_len, intermediate_size) + ${{torch.nn.modules.dropout.Dropout}}(batch_size, seq_len, intermediate_size) + batch_size * seq_len * intermediate_size + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, intermediate_size, hidden_size)
 - Memory Access:
-  - Read: ${{input_proj}}(...) + ${{activation}}(...) + ${{dropout}}(...) + 2 * batch_size * seq_len * intermediate_size * a_bytes + ${{output_proj}}(...)
-  - Write: ${{input_proj}}(...) + ${{activation}}(...) + ${{dropout}}(...) + batch_size * seq_len * intermediate_size * a_bytes + ${{output_proj}}(...)
+  - Read: ${{torch.nn.modules.linear.Linear}}(...) + ${{torch.nn.modules.activation.SiLU}}(...) + ${{torch.nn.modules.dropout.Dropout}}(...) + 2 * batch_size * seq_len * intermediate_size * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
+  - Write: ${{torch.nn.modules.linear.Linear}}(...) + ${{torch.nn.modules.activation.SiLU}}(...) + ${{torch.nn.modules.dropout.Dropout}}(...) + batch_size * seq_len * intermediate_size * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
 
 Example 5 - Chained operations with element-wise multiply:
 ```
@@ -195,15 +189,15 @@ Line 203: result = self.proj_out(self.norm(features) * self.gate(features))
 ```
 - Operation: Element-wise multiplication between normalized features and gated features, then projection
 - Analysis: In THIS module:
-  - self.norm(features): module call → reference as ${{norm}}(...)
-  - self.gate(features): module call → reference as ${{gate}}(...)
+  - self.norm(features): RMSNorm layer → reference as ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...)
+  - self.gate(features): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(...)
   - Multiplication (*): direct operation → COUNT IT
-  - self.proj_out(...): module call → reference as ${{proj_out}}(...)
+  - self.proj_out(...): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(...)
   Both operands for multiplication have shape (batch_size, seq_len, feature_dim).
-- FLOPs: ${{norm}}(batch_size, seq_len, feature_dim) + ${{gate}}(batch_size, seq_len, feature_dim) + batch_size * seq_len * feature_dim + ${{proj_out}}(batch_size, seq_len, feature_dim, output_dim)
+- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, feature_dim) + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, feature_dim) + batch_size * seq_len * feature_dim + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, output_dim)
 - Memory Access:
-  - Read: ${{norm}}(...) + ${{gate}}(...) + 2 * batch_size * seq_len * feature_dim * a_bytes + ${{proj_out}}(...)
-  - Write: ${{norm}}(...) + ${{gate}}(...) + batch_size * seq_len * feature_dim * a_bytes + ${{proj_out}}(...)
+  - Read: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...) + ${{torch.nn.modules.linear.Linear}}(...) + 2 * batch_size * seq_len * feature_dim * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
+  - Write: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...) + ${{torch.nn.modules.linear.Linear}}(...) + batch_size * seq_len * feature_dim * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
 
 ## Step-by-Step Analysis Process
 
@@ -211,7 +205,7 @@ Follow this TODO list systematically. Mark each item as you complete it.
 
 ### Phase 1: Scratchpad Analysis (SCRATCHPAD.md)
 
-1. [ ] Read and understand the forward() method source code
+1. [ ] Find and read the forward() method source code for {module_name}
 2. [ ] Identify the default inference path (skip training/special config branches)
 3. [ ] List all variables and their dimensions/shapes used in the method
 4. [ ] Go through the code line by line, noting actual line numbers from the source
@@ -271,9 +265,11 @@ Follow this TODO list systematically. Mark each item as you complete it.
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--module", required=True)
+    parser.add_argument("--transformers", required=True)
+    parser.add_argument("--pytorch", required=True)
     args = parser.parse_args()
 
-    asyncio.run(module_analyze(args.module, Path(".")))
+    asyncio.run(module_analyze(args.module, Path("."), args.transformers, args.pytorch))
 
 
 if __name__ == "__main__":
