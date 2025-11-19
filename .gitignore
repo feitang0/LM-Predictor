@@ -4,3 +4,4 @@ tmp
 .vscode
 .DS_Store
 .env
+uv.lock
