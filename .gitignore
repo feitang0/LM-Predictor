@@ -5,3 +5,4 @@ tmp
 .DS_Store
 .env
 uv.lock
+.python-version
