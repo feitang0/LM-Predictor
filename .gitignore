@@ -6,3 +6,4 @@ tmp
 .env
 uv.lock
 .python-version
+SCRATCHPAD.md
