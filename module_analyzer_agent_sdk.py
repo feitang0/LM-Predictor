@@ -15,9 +15,9 @@ DISALLOWED_TOOLS: Final[list[str]] = [
     "Bash",
     # "Glob",
     # "Grep",
+    "Edit",  # Not needed - agent only writes new files, doesn't edit existing ones
     "ExitPlanMode",
     # "Read",
-    # "Edit",
     # "Write",
     "NotebookEdit",
     "WebFetch",
@@ -36,25 +36,26 @@ def load_prompt_template(filename: str) -> str:
     return prompt_path.read_text()
 
 
-async def module_analyze(module_name: str, working_dir: str, transformers_dir: str, pytorch_dir: str) -> None:
-    analysis_file = "module_analysis.json"
-    analysis_file_path = Path(f"{working_dir}/{analysis_file}")
+async def module_analyze(module_name: str, working_dir: str, transformers_dir: str, pytorch_dir: str, output_dir: str) -> None:
+    # analysis_file = "module_analysis.json"
+    # analysis_file_path = Path(f"{working_dir}/{analysis_file}")
     analysis_schema_file = "module_analysis_schema.json"
-    scratchpad_file_path = Path(f"{working_dir}/SCRATCHPAD.md")
+    # scratchpad_file_path = Path(f"{working_dir}/SCRATCHPAD.md")
 
-    if analysis_file_path.exists():
-        analysis_file_path.unlink()
-    if scratchpad_file_path.exists():
-        scratchpad_file_path.unlink()
+    # if analysis_file_path.exists():
+    #     analysis_file_path.unlink()
+    # if scratchpad_file_path.exists():
+    #     scratchpad_file_path.unlink()
 
     # Load prompt template and substitute variables
-    prompt_template = load_prompt_template("analyze_module_forward.txt")
+    prompt_template = load_prompt_template("module_analyzer.txt")
     prompt = prompt_template.format(
         module_name=module_name,
         transformers_dir=transformers_dir,
         pytorch_dir=pytorch_dir,
         working_dir=working_dir,
-        analysis_file=analysis_file,
+        output_dir=output_dir,
+        # analysis_file=analysis_file,
         analysis_schema_file=analysis_schema_file,
     )
     print(prompt)
@@ -66,7 +67,7 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
             # model="haiku",
             model="sonnet",
             cwd=working_dir,
-            add_dirs=[transformers_dir, pytorch_dir],
+            add_dirs=[transformers_dir, pytorch_dir, output_dir],
             agents={},
         ),
     ):
@@ -86,7 +87,7 @@ def main() -> None:
     parser.add_argument("--pytorch", required=True)
     args = parser.parse_args()
 
-    asyncio.run(module_analyze(args.module, Path("."), args.transformers, args.pytorch))
+    asyncio.run(module_analyze(args.module, Path("."), args.transformers, args.pytorch, "modules"))
 
 
 if __name__ == "__main__":

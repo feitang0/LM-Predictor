@@ -26,10 +26,10 @@
           "kernel_type": {
             "type": "string",
             "enum": [
-              "direct_operation",
-              "module_call"
+              "basic",
+              "composite"
             ],
-            "description": "Whether this is a direct tensor op or a sub-module call"
+            "description": "Whether this is a basic operation or a composite operation made of sub-kernels"
           },
           "operation": {
             "type": "string",
