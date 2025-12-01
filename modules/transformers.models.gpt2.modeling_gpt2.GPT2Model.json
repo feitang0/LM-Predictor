@@ -1,0 +1,165 @@
+{
+  "class_name": "transformers.models.gpt2.modeling_gpt2.GPT2Model",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Configuration variable assignment",
+      "analysis": "Python variable assignments for output_attentions, output_hidden_states, use_cache, and return_dict. No tensor operations or computational cost.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Input validation and shape extraction",
+      "analysis": "Python operations and tensor shape/view operations. The view() operation creates a reference, not a copy. No computational cost.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Device metadata extraction",
+      "analysis": "Python attribute access to get device information. No tensor operations.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Position IDs creation",
+      "analysis": "torch.arange creates a tensor of shape (seq_len,) and unsqueeze(0) makes it (1, seq_len). This is a small tensor creation operation with no arithmetic.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "{seq_len} * 4"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Attention mask transformation",
+      "analysis": "For standard inference (not flash_attention_2), the mask is reshaped and transformed. Key operations: view() (reference), broadcasting (reference), dtype conversion, and element-wise operations (subtraction and multiplication).",
+      "flops": "2 * {batch_size} * {seq_len}",
+      "memory_access": {
+        "read": "2 * {batch_size} * {seq_len} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Head mask preparation",
+      "analysis": "Calls get_head_mask method. For inference with head_mask = None, this typically returns None or a tensor of ones.",
+      "flops": "${torch.nn.modules.linear.Linear}(head_mask_processing)",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}(head_mask_processing)",
+        "write": "${torch.nn.modules.linear.Linear}(head_mask_processing)"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Word token embeddings",
+      "analysis": "Embedding layer call for word tokens. self.wte is an nn.Embedding layer that maps input_ids to embeddings.",
+      "flops": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {vocab_size}, {hidden_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {vocab_size}, {hidden_size})",
+        "write": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {vocab_size}, {hidden_size})"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Position embeddings",
+      "analysis": "Embedding layer call for position embeddings. self.wpe is an nn.Embedding layer that maps position_ids to embeddings.",
+      "flops": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {max_position_embeddings}, {hidden_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {max_position_embeddings}, {hidden_size})",
+        "write": "${torch.nn.modules.sparse.Embedding}({batch_size}, {seq_len}, {max_position_embeddings}, {hidden_size})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Embedding addition",
+      "analysis": "Element-wise addition of word embeddings and position embeddings. Both tensors have shape (batch_size, seq_len, hidden_size).",
+      "flops": "{batch_size} * {seq_len} * {hidden_size}",
+      "memory_access": {
+        "read": "2 * {batch_size} * {seq_len} * {hidden_size} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Dropout layer",
+      "analysis": "Dropout layer applied to hidden states. In inference mode, dropout is typically disabled (acts as identity).",
+      "flops": "${torch.nn.modules.dropout.Dropout}({batch_size}, {seq_len}, {hidden_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.dropout.Dropout}({batch_size}, {seq_len}, {hidden_size})",
+        "write": "${torch.nn.modules.dropout.Dropout}({batch_size}, {seq_len}, {hidden_size})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Output shape definition",
+      "analysis": "Python tuple operations to define output shape. No tensor computation.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Output collection initialization",
+      "analysis": "Python tuple creation for output collections (presents, attentions, hidden_states). No tensor operations.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Transformer blocks loop",
+      "analysis": "Main computational loop running num_layers times. Each block is a GPT2Block instance containing attention and MLP layers. Parameter justification: batch_size, seq_len from input processing; hidden_size from config; num_heads from config.n_head; head_dim = hidden_size / num_heads; intermediate_size from config.n_inner or 4 * hidden_size; cache_len from past_key_values; use_cache=True for inference.",
+      "flops": "{num_layers} * ${transformers.models.gpt2.modeling_gpt2.GPT2Block}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len}, {use_cache})",
+      "memory_access": {
+        "read": "{num_layers} * ${transformers.models.gpt2.modeling_gpt2.GPT2Block}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len}, {use_cache})",
+        "write": "{num_layers} * ${transformers.models.gpt2.modeling_gpt2.GPT2Block}({batch_size}, {seq_len}, {hidden_size}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len}, {use_cache})"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Final layer normalization",
+      "analysis": "Final layer normalization applied to hidden states. self.ln_f is a nn.LayerNorm layer.",
+      "flops": "${torch.nn.modules.normalization.LayerNorm}({batch_size}, {seq_len}, {hidden_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.normalization.LayerNorm}({batch_size}, {seq_len}, {hidden_size})",
+        "write": "${torch.nn.modules.normalization.LayerNorm}({batch_size}, {seq_len}, {hidden_size})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Output tensor reshaping",
+      "analysis": "view() operation to reshape hidden states to output_shape. Creates a reference, not a copy. No computational cost.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Output object creation",
+      "analysis": "Python object creation with tensor references for BaseModelOutputWithPastAndCrossAttentions. No tensor computation.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    }
+  ]
+}

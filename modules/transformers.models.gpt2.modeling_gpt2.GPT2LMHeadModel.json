@@ -1,0 +1,85 @@
+{
+  "class_name": "transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Configuration logic for return format",
+      "analysis": "Python configuration assignment that determines the output format. No tensor computation or memory access occurs here.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Main transformer processing through GPT2Model",
+      "analysis": "Calls the GPT2Model transformer module which contains all the GPT-2 layers. The module processes the input through multiple transformer blocks with attention and MLP layers. Parameter justification: batch_size from input_ids.shape[0] or inputs_embeds.shape[0], seq_len from input_ids.shape[1] or inputs_embeds.shape[1], hidden_size from config.n_embd, num_layers from config.n_layer, num_heads from config.n_head, head_dim computed as hidden_size / num_heads, intermediate_size from config.n_inner, cache_len from past_key_values[0][0].size(-2) if provided else 0.",
+      "flops": "${transformers.models.gpt2.modeling_gpt2.GPT2Model}({batch_size}, {seq_len}, {hidden_size}, {num_layers}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len})",
+      "memory_access": {
+        "read": "${transformers.models.gpt2.modeling_gpt2.GPT2Model}({batch_size}, {seq_len}, {hidden_size}, {num_layers}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len})",
+        "write": "${transformers.models.gpt2.modeling_gpt2.GPT2Model}({batch_size}, {seq_len}, {hidden_size}, {num_layers}, {num_heads}, {head_dim}, {intermediate_size}, {cache_len})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Extract hidden states from transformer outputs",
+      "analysis": "Python tuple indexing operation that returns a reference to the first element of transformer_outputs. No tensor data is copied; it's just reference manipulation.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Device synchronization for model parallelism",
+      "analysis": "Under default inference conditions (model_parallel = False), this branch is skipped. No computation occurs.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Final projection to vocabulary space",
+      "analysis": "The lm_head is a Linear layer that projects from hidden_size to vocab_size. This converts the final hidden states into logits over the vocabulary. Parameter justification: batch_size from hidden_states.shape[0], seq_len from hidden_states.shape[1], hidden_size from config.n_embd, vocab_size from config.vocab_size.",
+      "flops": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})",
+      "memory_access": {
+        "read": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})",
+        "write": "${torch.nn.modules.linear.Linear}({batch_size}, {seq_len}, {hidden_size}, {vocab_size})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Training loss computation",
+      "analysis": "Under inference conditions (labels = None), this entire block is skipped. No computation occurs.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Alternative output format",
+      "analysis": "Under default inference conditions (return_dict = True), this branch is skipped. No computation occurs.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Output packaging",
+      "analysis": "Creates a CausalLMOutputWithCrossAttentions object with references to existing tensors. No new tensor computation or memory access occurs; it's just Python object construction with existing tensor references.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    }
+  ]
+}

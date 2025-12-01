@@ -1,0 +1,15 @@
+{
+  "class_name": "torch.nn.modules.linear.Linear",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Linear transformation: matrix multiplication and bias addition",
+      "analysis": "Line 125: return F.linear(input, self.weight, self.bias)\n\nThis performs the linear transformation: output = input @ weight.T + bias (if bias is not None).\n\nMathematical operations:\n1. Matrix multiplication: input (shape: {batch_size} * {seq_len}, {hidden_size}) @ weight.T (shape: {hidden_size}, {output_size})\n   - FLOPs: 2 * {batch_size} * {seq_len} * {hidden_size} * {output_size}\n   - This is 2 FLOPs per multiply-accumulate (1 multiply + 1 add)\n\n2. Bias addition (if {has_bias}):\n   - Element-wise addition of bias (shape: {output_size}) broadcasted to output shape\n   - FLOPs: {batch_size} * {seq_len} * {output_size}\n\nMemory access analysis:\n- Read operations:\n  - Input tensor: {batch_size} * {seq_len} * {hidden_size} * {a_bytes}\n  - Weight tensor: {hidden_size} * {output_size} * {w_bytes}\n  - Bias tensor (if {has_bias}): {output_size} * {w_bytes}\n- Write operations:\n  - Output tensor: {batch_size} * {seq_len} * {output_size} * {a_bytes}\n\nParameter justification:\n- {batch_size}: From input.shape[0], number of independent samples in batch\n- {seq_len}: From input.shape[1] for sequence data, length of input sequence\n- {hidden_size}: From self.in_features, input dimension of linear layer (corresponds to hidden_size in transformers)\n- {output_size}: From self.out_features, output dimension of linear layer\n- {has_bias}: Boolean, true if self.bias is not None (from constructor bias parameter)\n- {a_bytes}: Activation precision in bytes (e.g., 2 for fp16, 4 for fp32)\n- {w_bytes}: Weight precision in bytes (e.g., 2 for fp16, 4 for fp32)",
+      "flops": "2 * {batch_size} * {seq_len} * {hidden_size} * {output_size} + ({batch_size} * {seq_len} * {output_size} if {has_bias} else 0)",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes} + {hidden_size} * {output_size} * {w_bytes} + ({output_size} * {w_bytes} if {has_bias} else 0)",
+        "write": "{batch_size} * {seq_len} * {output_size} * {a_bytes}"
+      }
+    }
+  ]
+}

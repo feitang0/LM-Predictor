@@ -1,0 +1,45 @@
+{
+  "class_name": "torch.nn.modules.normalization.LayerNorm",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Compute mean and variance along normalized dimensions",
+      "analysis": "The var_mean operation computes both the mean and variance of the input tensor along the normalized dimensions in a single pass. For input shape ({batch_size}, {seq_len}, {hidden_size}) normalizing over {hidden_size}: (1) Mean computation requires summing {hidden_size} elements for each of {batch_size} * {seq_len} positions and dividing by {hidden_size}, costing approximately {batch_size} * {seq_len} * {hidden_size} FLOPs. (2) Variance computation requires subtracting the mean, squaring, summing, and dividing, costing approximately 3 * {batch_size} * {seq_len} * {hidden_size} FLOPs. Total: 4 * {batch_size} * {seq_len} * {hidden_size} FLOPs. The operation reads the entire input tensor of size {batch_size} * {seq_len} * {hidden_size} and writes two outputs (mean and variance) each of size {batch_size} * {seq_len}.",
+      "flops": "4 * {batch_size} * {seq_len} * {hidden_size}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}",
+        "write": "2 * {batch_size} * {seq_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Add epsilon and compute reciprocal square root",
+      "analysis": "This operation takes the variance tensor of shape ({batch_size}, {seq_len}, 1), adds a small epsilon value for numerical stability, and computes the reciprocal square root to get the inverse standard deviation. For each of the {batch_size} * {seq_len} elements: (1) Add epsilon (scalar broadcast): 1 addition. (2) Compute rsqrt (reciprocal square root): approximately 1 FLOP. Total: 2 * {batch_size} * {seq_len} FLOPs. Reads the variance tensor and writes the rstd (reciprocal standard deviation) tensor, both of size {batch_size} * {seq_len}.",
+      "flops": "2 * {batch_size} * {seq_len}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Subtract mean and multiply by reciprocal standard deviation",
+      "analysis": "This operation normalizes the input by centering (subtracting mean) and scaling (multiplying by reciprocal standard deviation). The input has shape ({batch_size}, {seq_len}, {hidden_size}). The mean and rstd both have shape ({batch_size}, {seq_len}, 1) and are broadcast across the {hidden_size} dimension. Operations: (1) Subtract mean: {batch_size} * {seq_len} * {hidden_size} subtractions. (2) Multiply by rstd: {batch_size} * {seq_len} * {hidden_size} multiplications. Total: 2 * {batch_size} * {seq_len} * {hidden_size} FLOPs. Reads the input tensor, mean, and rstd, then writes the normalized output.",
+      "flops": "2 * {batch_size} * {seq_len} * {hidden_size}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes} + 2 * {batch_size} * {seq_len} * {a_bytes}",
+        "write": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Apply learnable scale (weight) and shift (bias)",
+      "analysis": "This affine transformation applies the learnable weight (scale) and bias (shift) parameters to the normalized output. The normalized output has shape ({batch_size}, {seq_len}, {hidden_size}). The weight and bias both have shape ({hidden_size},) and are broadcast across the batch and sequence dimensions. Operations: (1) Element-wise multiply by weight: {batch_size} * {seq_len} * {hidden_size} multiplications. (2) Element-wise add bias: {batch_size} * {seq_len} * {hidden_size} additions. Total: 2 * {batch_size} * {seq_len} * {hidden_size} FLOPs. Reads the normalized output (activations), weight parameters, and bias parameters, then writes the final output. Note that weight and bias are parameters stored in {w_bytes} precision.",
+      "flops": "2 * {batch_size} * {seq_len} * {hidden_size}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes} + 2 * {hidden_size} * {w_bytes}",
+        "write": "{batch_size} * {seq_len} * {hidden_size} * {a_bytes}"
+      }
+    }
+  ]
+}

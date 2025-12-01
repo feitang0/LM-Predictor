@@ -1,0 +1,45 @@
+{
+  "class_name": "transformers.pytorch_utils.Conv1D",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Tuple concatenation for output shape calculation",
+      "analysis": "This line computes the output shape by taking all dimensions of x except the last one and appending self.nf (output dimension). x.size()[:-1] extracts a tuple of all dimensions except the last (e.g., (batch_size, seq_len) for 3D input). (self.nf,) creates a single-element tuple with the output dimension. The + operator concatenates these tuples. This is purely Python tuple manipulation with no tensor operations or memory access.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Matrix multiplication with bias addition",
+      "analysis": "torch.addmm(bias, input, weight) computes: bias + input @ weight. x.view(-1, x.size(-1)) reshapes the input to 2D: (batch_size * seq_len, input_dim). self.weight has shape (input_dim, output_dim) (note: transposed compared to standard linear layer). self.bias has shape (output_dim,) and is broadcast to add to each row. Tensor shapes: Input reshaped: (batch_size * seq_len, input_dim), Weight: (input_dim, output_dim), Bias: (output_dim,), Output: (batch_size * seq_len, output_dim). FLOPs calculation: Matrix multiplication: input @ weight = 2 * (batch_size * seq_len) * input_dim * output_dim FLOPs. Bias addition: batch_size * seq_len * output_dim FLOPs (element-wise addition). Memory access calculation: Read: Input: batch_size * seq_len * input_dim * a_bytes, Weight: input_dim * output_dim * w_bytes, Bias: output_dim * w_bytes. Write: Output: batch_size * seq_len * output_dim * a_bytes.",
+      "flops": "2 * {batch_size} * {seq_len} * {input_dim} * {output_dim} + {batch_size} * {seq_len} * {output_dim}",
+      "memory_access": {
+        "read": "{batch_size} * {seq_len} * {input_dim} * {a_bytes} + {input_dim} * {output_dim} * {w_bytes} + {output_dim} * {w_bytes}",
+        "write": "{batch_size} * {seq_len} * {output_dim} * {a_bytes}"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Tensor reshaping",
+      "analysis": "Reshapes the output from 2D (batch_size * seq_len, output_dim) back to the original shape with the last dimension changed to output_dim. For example, if input was (batch_size, seq_len, input_dim), output becomes (batch_size, seq_len, output_dim). view() in PyTorch creates a new view of the same data without copying (when possible). However, since we're going from a contiguous 2D tensor to a multi-dimensional tensor, this may involve some memory reorganization. The tensor data is not copied, but the view operation may require metadata updates. For computational cost analysis, we consider this as a reference operation with zero memory cost for the tensor data itself.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Return statement",
+      "analysis": "Returns the output tensor. This is a Python return statement with no computational cost.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "class_name": "transformers.models.gpt2.modeling_gpt2.GPT2MLP",
+  "kernels": [
+    {
+      "kernel_type": "composite",
+      "operation": "First linear projection (c_fc) expanding from hidden_size to intermediate_size",
+      "analysis": "The c_fc layer is a Conv1D layer (essentially a linear layer with transposed weight storage). Input shape: (batch_size, seq_len, hidden_size). Output shape: (batch_size, seq_len, intermediate_size). Operation: y = xW^T + b where x ∈ ℝ^(batch_size×seq_len × hidden_size), W ∈ ℝ^(intermediate_size × hidden_size), b ∈ ℝ^(intermediate_size). The Conv1D.forward() method uses torch.addmm(bias, x.view(-1, x.size(-1)), self.weight) which computes bias + x @ weight^T.\n\nParameter justification:\n- batch_size × seq_len: From input tensor shape, determines total tokens\n- hidden_size: Input dimension (from config.hidden_size)\n- intermediate_size: Output dimension (from config.n_inner or 4 × hidden_size)\nWHERE: hidden_size from config.hidden_size, intermediate_size from config.n_inner or 4 × hidden_size\nWHY: Determines matrix dimensions for linear transformation\nHOW: Checked GPT2MLP.__init__ at line 567-570: embed_dim = config.hidden_size, self.c_fc = Conv1D(intermediate_size, embed_dim)",
+      "flops": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {hidden_size}, {intermediate_size})",
+      "memory_access": {
+        "read": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {hidden_size}, {intermediate_size})",
+        "write": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {hidden_size}, {intermediate_size})"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "NewGELU activation function",
+      "analysis": "The activation function is NewGELUActivation (default for GPT-2). Input shape: (batch_size, seq_len, intermediate_size). Output shape: same as input. Operation: 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0)))). This involves element-wise operations: power (cubic), scalar multiplications, additions, and hyperbolic tangent.\n\nParameter justification:\n- batch_size: Batch dimension\n- seq_len: Sequence length\n- intermediate_size: Activation dimension (from config.n_inner or 4 × hidden_size)\nWHERE: intermediate_size from config.n_inner or 4 × hidden_size\nWHY: Determines number of elements for element-wise operations\nHOW: Checked GPT2MLP.__init__ at line 570: self.act = ACT2FN[config.activation_function] where config.activation_function = 'gelu_new' (NewGELUActivation)",
+      "flops": "${transformers.activations.NewGELUActivation}({batch_size}, {seq_len}, {intermediate_size})",
+      "memory_access": {
+        "read": "${transformers.activations.NewGELUActivation}({batch_size}, {seq_len}, {intermediate_size})",
+        "write": "${transformers.activations.NewGELUActivation}({batch_size}, {seq_len}, {intermediate_size})"
+      }
+    },
+    {
+      "kernel_type": "composite",
+      "operation": "Second linear projection (c_proj) projecting back from intermediate_size to hidden_size",
+      "analysis": "The c_proj layer is another Conv1D layer. Input shape: (batch_size, seq_len, intermediate_size). Output shape: (batch_size, seq_len, hidden_size). Operation: y = xW^T + b where x ∈ ℝ^(batch_size×seq_len × intermediate_size), W ∈ ℝ^(hidden_size × intermediate_size), b ∈ ℝ^(hidden_size).\n\nParameter justification:\n- batch_size × seq_len: From input tensor shape\n- intermediate_size: Input dimension (from config.n_inner or 4 × hidden_size)\n- hidden_size: Output dimension (from config.hidden_size)\nWHERE: hidden_size from config.hidden_size, intermediate_size from config.n_inner or 4 × hidden_size\nWHY: Determines matrix dimensions for linear transformation\nHOW: Checked GPT2MLP.__init__ at line 569: self.c_proj = Conv1D(embed_dim, intermediate_size) where embed_dim = config.hidden_size",
+      "flops": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {intermediate_size}, {hidden_size})",
+      "memory_access": {
+        "read": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {intermediate_size}, {hidden_size})",
+        "write": "${transformers.pytorch_utils.Conv1D}({batch_size} * {seq_len}, {intermediate_size}, {hidden_size})"
+      }
+    },
+    {
+      "kernel_type": "basic",
+      "operation": "Dropout layer (zero-cost during inference)",
+      "analysis": "The dropout layer (nn.Dropout) returns the input unchanged during inference (when training=False). This is a pure reference operation with no computation or memory access. Input shape: (batch_size, seq_len, hidden_size). Output shape: same as input. No data is read or written; the dropout layer simply passes through the input tensor during inference.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    }
+  ]
+}

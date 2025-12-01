@@ -1,0 +1,15 @@
+{
+  "class_name": "torch.nn.modules.dropout.Dropout",
+  "kernels": [
+    {
+      "kernel_type": "basic",
+      "operation": "Identity operation during inference (dropout disabled)",
+      "analysis": "During standard inference with training=False, dropout acts as a pure identity function. According to the reference implementation in torch._refs.nn.functional.dropout() at line 201-202, when not training, the function simply returns the input tensor directly without any computation or data movement. This is a Python reference return - no tensor data is copied, no arithmetic is performed, and no memory is accessed. The dropout probability p and scaling factor 1/(1-p) are only applied during training to regularize the network. During inference, dropout is completely transparent with zero cost, as the expected value correction was already applied during training.",
+      "flops": "0",
+      "memory_access": {
+        "read": "0",
+        "write": "0"
+      }
+    }
+  ]
+}
