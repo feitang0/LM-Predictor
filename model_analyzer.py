@@ -16,6 +16,65 @@ from transformers import AutoModelForCausalLM, AutoConfig
 load_dotenv()
 
 
+def extract_model_params(config) -> Dict[str, Any]:
+    """Extract standardized parameters from any HuggingFace config.
+
+    Handles different naming conventions across model families:
+    - GPT-2: n_embd, n_head, n_layer, n_inner
+    - Llama/Mistral: hidden_size, num_attention_heads, num_hidden_layers
+    - BERT: hidden_size, num_attention_heads, num_hidden_layers
+
+    Args:
+        config: HuggingFace model config object
+
+    Returns:
+        Dictionary with standardized parameter names
+    """
+    params = {}
+
+    # hidden_size
+    params['hidden_size'] = (
+        getattr(config, 'hidden_size', None) or
+        getattr(config, 'n_embd', None) or
+        getattr(config, 'd_model', None)
+    )
+
+    # num_heads
+    params['num_heads'] = (
+        getattr(config, 'num_attention_heads', None) or
+        getattr(config, 'n_head', None) or
+        getattr(config, 'num_heads', None)
+    )
+
+    # num_layers
+    params['num_layers'] = (
+        getattr(config, 'num_hidden_layers', None) or
+        getattr(config, 'n_layer', None) or
+        getattr(config, 'num_layers', None)
+    )
+
+    # intermediate_size
+    params['intermediate_size'] = (
+        getattr(config, 'intermediate_size', None) or
+        getattr(config, 'n_inner', None) or
+        (params['hidden_size'] * 4 if params['hidden_size'] else None)
+    )
+
+    # vocab_size
+    params['vocab_size'] = getattr(config, 'vocab_size', None)
+
+    # head_dim (derived)
+    if params['hidden_size'] and params['num_heads']:
+        params['head_dim'] = params['hidden_size'] // params['num_heads']
+    else:
+        params['head_dim'] = None
+
+    # has_bias (default True for most models)
+    params['has_bias'] = not getattr(config, 'bias', True) == False
+
+    return params
+
+
 class ModelAnalyzer:
     """Modular model analyzer using meta device and module database."""
 
@@ -60,6 +119,7 @@ class ModelAnalyzer:
         print(f"\nModel Configuration:")
         print(self.config)
         print(f"\nModel Structure:")
+        print(self.model)
         self.print_enhanced_model()
 
     def collect_module_classes(self, module, classes=None):
@@ -125,6 +185,101 @@ class ModelAnalyzer:
             enhanced_str = re.sub(pattern, replacement, enhanced_str)
 
         return enhanced_str
+
+    def _populate_value(self, value: Any, params: Dict[str, Any], is_formula: bool = False) -> Any:
+        """Recursively populate template variables in a value and evaluate expressions.
+
+        Args:
+            value: The value to process (string, dict, list, or other)
+            params: Dictionary of parameter name -> value mappings
+            is_formula: If True, this is a formula field that should be evaluated
+
+        Returns:
+            The value with all template variables substituted and expressions evaluated
+
+        Raises:
+            ValueError: If any template variable in a formula cannot be resolved
+        """
+        if isinstance(value, str):
+            if not is_formula:
+                # Non-formula string (like 'analysis', 'operation') - return as-is
+                return value
+
+            # Formula string - substitute and evaluate
+            result = value
+            for name, val in params.items():
+                result = result.replace(f"{{{name}}}", str(val))
+
+            # Check for remaining unresolved variables
+            remaining = re.findall(r'\{(\w+)\}', result)
+            if remaining:
+                raise ValueError(f"Unresolved template variables: {remaining}")
+
+            # Try to evaluate arithmetic expression
+            try:
+                evaluated = eval(result)
+                # Return as int if it's a whole number, otherwise as-is
+                if isinstance(evaluated, float) and evaluated.is_integer():
+                    return int(evaluated)
+                return evaluated
+            except:
+                return result  # Return as-is if not evaluatable (e.g., pure strings)
+
+        elif isinstance(value, dict):
+            result = {}
+            for k, v in value.items():
+                # Determine if this key contains a formula
+                key_is_formula = k in ('flops', 'read', 'write')
+                result[k] = self._populate_value(v, params, is_formula=key_is_formula)
+            return result
+        elif isinstance(value, list):
+            return [self._populate_value(item, params, is_formula=is_formula) for item in value]
+        else:
+            return value
+
+    def populate_template(
+        self,
+        model_json: Dict[str, Any],
+        batch_size: int,
+        seq_len: int,
+        cache_len: int = 0,
+        w_bytes: int = 2,
+        a_bytes: int = 2,
+        config_params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Populate template variables in model analysis JSON and evaluate to numbers.
+
+        Args:
+            model_json: Model analysis JSON with {variable} placeholders
+            batch_size: Batch size
+            seq_len: Sequence length
+            cache_len: KV cache length (default 0 for prefill)
+            w_bytes: Weight precision in bytes (default 2 for fp16)
+            a_bytes: Activation precision in bytes (default 2 for fp16)
+            config_params: Architecture params (from extract_model_params or manual dict)
+
+        Returns:
+            JSON with all formulas evaluated to numeric values
+
+        Raises:
+            ValueError: If any template variable cannot be resolved
+        """
+        # Build complete parameter dictionary
+        params = {
+            # Runtime parameters
+            'batch_size': batch_size,
+            'seq_len': seq_len,
+            'cache_len': cache_len,
+            'w_bytes': w_bytes,
+            'a_bytes': a_bytes,
+        }
+
+        # Add architecture parameters from config
+        if config_params:
+            params.update(config_params)
+
+        # Recursively populate and evaluate
+        return self._populate_value(model_json, params)
 
     def _extract_all_layers_with_parameters_from_json(self, layers, parent_path="", repeat_multiplier=1):
         """
@@ -468,6 +623,10 @@ def main():
                        help='Ensure all modules needed by architecture are analyzed and generated')
     parser.add_argument('--populate-arch', action='store_true',
                        help='Populate parameters for architecture JSON (requires architecture to exist in models/)')
+    parser.add_argument('--populate', action='store_true',
+                       help='Populate template variables in model JSON and evaluate formulas')
+    parser.add_argument('--cache_len', type=int, default=0,
+                       help='KV cache length for decode phase (default: 0 for prefill)')
 
     args = parser.parse_args()
 
@@ -490,6 +649,44 @@ def main():
                 with open(args.output, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 print(f"Analysis saved to: {args.output}")
+
+        elif args.populate:
+            # Populate template mode - requires model_json
+            if not args.model_json:
+                print("Error: --populate requires --model_json")
+                return 1
+
+            # Load model JSON
+            with open(args.model_json, 'r') as f:
+                model_json = json.load(f)
+
+            # Extract config params if model_id provided
+            config_params = {}
+            if args.model_id:
+                print(f"Loading model config: {args.model_id}")
+                analyzer = ModelAnalyzer(model_id=args.model_id)
+                analyzer.load_model_architecture()
+                config_params = extract_model_params(analyzer.config)
+                print(f"Extracted config params: {config_params}")
+
+            # Create analyzer and populate template
+            analyzer = ModelAnalyzer(model_json_path=args.model_json)
+            populated = analyzer.populate_template(
+                model_json=model_json,
+                batch_size=args.batch_size,
+                seq_len=args.seq_len,
+                cache_len=args.cache_len,
+                w_bytes=args.w_bit // 8,
+                a_bytes=args.a_bit // 8,
+                config_params=config_params
+            )
+
+            # Output
+            output_path = args.output or args.model_json.replace('.json', '_populated.json')
+            with open(output_path, 'w') as f:
+                json.dump(populated, f, indent=2)
+            print(f"Populated JSON saved to: {output_path}")
+
         else:
             # Default: Inspection mode using model_id
             analyzer = ModelAnalyzer(model_id=args.model_id)

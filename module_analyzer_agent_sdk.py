@@ -65,7 +65,7 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
             disallowed_tools=DISALLOWED_TOOLS,
             permission_mode="acceptEdits",
             # model="haiku",
-            model="sonnet",
+            # model="sonnet",
             cwd=working_dir,
             add_dirs=[transformers_dir, pytorch_dir, output_dir],
             agents={},
