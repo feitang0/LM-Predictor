@@ -186,12 +186,13 @@ class ModelAnalyzer:
 
         return enhanced_str
 
-    def _populate_value(self, value: Any, params: Dict[str, Any], is_formula: bool = False) -> Any:
+    def _populate_value(self, value: Any, params: Dict[str, Any], config: Any = None, is_formula: bool = False) -> Any:
         """Recursively populate template variables in a value and evaluate expressions.
 
         Args:
             value: The value to process (string, dict, list, or other)
             params: Dictionary of parameter name -> value mappings
+            config: HuggingFace model config object for resolving {config.xxx} patterns
             is_formula: If True, this is a formula field that should be evaluated
 
         Returns:
@@ -207,11 +208,21 @@ class ModelAnalyzer:
 
             # Formula string - substitute and evaluate
             result = value
+
+            # Handle {config.xxx} patterns first
+            config_vars = re.findall(r'\{config\.(\w+)\}', result)
+            for attr in config_vars:
+                if config and hasattr(config, attr):
+                    result = result.replace(f"{{config.{attr}}}", str(getattr(config, attr)))
+                else:
+                    raise ValueError(f"Config attribute not found: config.{attr}")
+
+            # Handle regular params
             for name, val in params.items():
                 result = result.replace(f"{{{name}}}", str(val))
 
             # Check for remaining unresolved variables
-            remaining = re.findall(r'\{(\w+)\}', result)
+            remaining = re.findall(r'\{[\w.]+\}', result)
             if remaining:
                 raise ValueError(f"Unresolved template variables: {remaining}")
 
@@ -230,10 +241,10 @@ class ModelAnalyzer:
             for k, v in value.items():
                 # Determine if this key contains a formula
                 key_is_formula = k in ('flops', 'read', 'write')
-                result[k] = self._populate_value(v, params, is_formula=key_is_formula)
+                result[k] = self._populate_value(v, params, config=config, is_formula=key_is_formula)
             return result
         elif isinstance(value, list):
-            return [self._populate_value(item, params, is_formula=is_formula) for item in value]
+            return [self._populate_value(item, params, config=config, is_formula=is_formula) for item in value]
         else:
             return value
 
@@ -245,6 +256,7 @@ class ModelAnalyzer:
         cache_len: int = 0,
         w_bytes: int = 2,
         a_bytes: int = 2,
+        config: Any = None,
         config_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Populate template variables in model analysis JSON and evaluate to numbers.
@@ -256,7 +268,8 @@ class ModelAnalyzer:
             cache_len: KV cache length (default 0 for prefill)
             w_bytes: Weight precision in bytes (default 2 for fp16)
             a_bytes: Activation precision in bytes (default 2 for fp16)
-            config_params: Architecture params (from extract_model_params or manual dict)
+            config: HuggingFace model config object for resolving {config.xxx} patterns
+            config_params: Additional params dict (legacy, for non-config variables)
 
         Returns:
             JSON with all formulas evaluated to numeric values
@@ -274,12 +287,12 @@ class ModelAnalyzer:
             'a_bytes': a_bytes,
         }
 
-        # Add architecture parameters from config
+        # Add additional parameters if provided
         if config_params:
             params.update(config_params)
 
         # Recursively populate and evaluate
-        return self._populate_value(model_json, params)
+        return self._populate_value(model_json, params, config=config)
 
     def _extract_all_layers_with_parameters_from_json(self, layers, parent_path="", repeat_multiplier=1):
         """
@@ -660,14 +673,14 @@ def main():
             with open(args.model_json, 'r') as f:
                 model_json = json.load(f)
 
-            # Extract config params if model_id provided
-            config_params = {}
+            # Load config if model_id provided
+            config = None
             if args.model_id:
                 print(f"Loading model config: {args.model_id}")
                 analyzer = ModelAnalyzer(model_id=args.model_id)
                 analyzer.load_model_architecture()
-                config_params = extract_model_params(analyzer.config)
-                print(f"Extracted config params: {config_params}")
+                config = analyzer.config
+                print(f"Loaded config: {config.__class__.__name__}")
 
             # Create analyzer and populate template
             analyzer = ModelAnalyzer(model_json_path=args.model_json)
@@ -678,7 +691,7 @@ def main():
                 cache_len=args.cache_len,
                 w_bytes=args.w_bit // 8,
                 a_bytes=args.a_bit // 8,
-                config_params=config_params
+                config=config
             )
 
             # Output

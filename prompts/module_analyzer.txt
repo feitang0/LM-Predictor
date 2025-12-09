@@ -111,21 +111,41 @@ Skip conditional branches for:
 - Special configurations
 - Non-default options
 
-**STANDARDIZED VARIABLE NAMES**
-Use these canonical names in ALL formulas:
-- batch_size: Batch size
-- seq_len: Sequence length
-- cache_len: KV cache length
-- hidden_size: Model hidden dimension
-- num_heads: Number of attention heads
-- head_dim: Attention head dimension (hidden_size / num_heads)
-- intermediate_size: MLP intermediate dimension (typically 4 * hidden_size)
-- vocab_size: Vocabulary size
-- num_layers: Number of transformer layers
-- w_bytes: Weight precision in bytes (typically 2 for fp16, 4 for fp32)
+**VARIABLE NAMING RULES**
+
+Variables depend on the module type:
+
+**1. Modules with explicit init parameters (PyTorch primitives)**
+Use the module's actual `__init__` parameter names:
+- `torch.nn.Linear(in_features, out_features, bias)` → `{{in_features}}`, `{{out_features}}`, `{{has_bias}}`
+- `torch.nn.Embedding(num_embeddings, embedding_dim)` → `{{num_embeddings}}`, `{{embedding_dim}}`
+- `torch.nn.LayerNorm(normalized_shape)` → `{{normalized_shape}}`
+- `transformers.pytorch_utils.Conv1D(nf, nx)` → `{{nf}}`, `{{nx}}`
+
+**2. Modules with config-based init (transformers layers/models)**
+Use the actual config attribute path as variable names:
+- {{config.hidden_size}} or {{config.n_embd}}: Model hidden dimension
+- {{config.num_attention_heads}} or {{config.n_head}}: Number of attention heads
+- {{config.intermediate_size}} or {{config.n_inner}}: MLP intermediate dimension
+- {{config.vocab_size}}: Vocabulary size
+- {{config.num_hidden_layers}} or {{config.n_layer}}: Number of transformer layers
+- head_dim: Derived as {{config.hidden_size}} / {{config.num_attention_heads}}
+
+Use the EXACT attribute name from the model's config class (check the config source code).
+
+**3. Runtime parameters (universal)**
+- batch_size: Batch size (from input tensor shape)
+- seq_len: Sequence length (from input tensor shape)
+- cache_len: KV cache length (0 for prefill, >0 for decode)
+- w_bytes: Weight precision in bytes (typically 2 for fp16)
 - a_bytes: Activation precision in bytes
 
-Add variables as needed, but USE these standard names even if source code uses different names.
+**Key Rule**: When a module CALLS another module, provide parameter mapping:
+```
+# Linear uses {{in_features}}, {{out_features}}
+# LlamaModel calls lm_head Linear with:
+${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.vocab_size}}, has_bias=False)
+```
 
 **PYTHON/PYTORCH REFERENCE SEMANTICS**
 
@@ -178,20 +198,62 @@ kernel_type: "composite"
 - Examples: self.linear(x), self.layer_norm(x), self.attention(x)
 - You reference the module; its FLOPs will be expanded later
 
+**REPEAT FIELD (optional)**
+
+Use `repeat` for operations that execute multiple times (e.g., transformer blocks):
+```json
+{{
+  "kernel_type": "composite",
+  "repeat": "{{config.n_layer}}",
+  "operation": "Transformer block forward pass",
+  ...
+}}
+```
+
+- Use config variable for the repeat count (e.g., `"{{config.n_layer}}"`, `"{{config.num_hidden_layers}}"`)
+- Default is 1 if not specified
+- The repeat value will be multiplied with FLOPs/memory during population
+
 **MODULE REFERENCE FORMAT: ${{...}}**
 
-For module calls, use: ${{fully.qualified.ClassName}}(param1, param2, ...)
+For module calls, use named parameter syntax:
+```
+${{fully.qualified.ClassName}}(callee_param1={{caller_value1}}, callee_param2={{caller_value2}}, ...)
+```
+
+**CRITICAL**: Use the callee module's `__init__` parameter names on the LEFT side, and the caller's values on the RIGHT side.
+
+**Common Module Reference Examples:**
+
+1. **torch.nn.Embedding** (init: `num_embeddings`, `embedding_dim`):
+```
+${{torch.nn.Embedding}}(num_embeddings={{config.vocab_size}}, embedding_dim={{config.n_embd}}, batch_size={{batch_size}}, seq_len={{seq_len}})
+```
+
+2. **torch.nn.Linear** (init: `in_features`, `out_features`, `bias`):
+```
+${{torch.nn.Linear}}(in_features={{config.n_embd}}, out_features={{config.vocab_size}}, has_bias=False, batch_size={{batch_size}}, seq_len={{seq_len}})
+```
+
+3. **torch.nn.LayerNorm** (init: `normalized_shape`):
+```
+${{torch.nn.LayerNorm}}(normalized_shape={{config.n_embd}}, batch_size={{batch_size}}, seq_len={{seq_len}})
+```
+
+4. **transformers Conv1D** (init: `nf`, `nx`):
+```
+${{transformers.pytorch_utils.Conv1D}}(nf={{config.n_embd}} * 3, nx={{config.n_embd}}, batch_size={{batch_size}}, seq_len={{seq_len}})
+```
 
 Rules:
 - fully.qualified.ClassName = complete Python import path
-  * torch.nn.modules.linear.Linear
-  * torch.nn.modules.normalization.LayerNorm
-  * transformers.models.llama.modeling_llama.LlamaRMSNorm
-- Determine the actual class type (e.g., self.q_proj is torch.nn.modules.linear.Linear)
-- Include ALL parameters needed for that module's calculation:
-  * Input/output dimensions
-  * batch_size, seq_len, cache_len
-  * Architecture parameters (num_heads, head_dim, etc.)
+  * torch.nn.modules.linear.Linear (or torch.nn.Linear)
+  * torch.nn.modules.sparse.Embedding (or torch.nn.Embedding)
+  * torch.nn.modules.normalization.LayerNorm (or torch.nn.LayerNorm)
+  * transformers.models.gpt2.modeling_gpt2.GPT2Block
+- Check the module's `__init__` to find the exact parameter names
+- Use `{{config.xxx}}` for config values (e.g., `{{config.n_embd}}`, `{{config.vocab_size}}`)
+- Use `{{batch_size}}`, `{{seq_len}}`, etc. for runtime values
 
 Combining operations:
 - If a line has BOTH module calls AND direct operations, SUM them:
@@ -292,9 +354,9 @@ Line 342: query_states = self.q_proj(hidden_states)
 ```
 - Kernel Type: composite
 - Operation: Query projection through linear layer
-- Analysis: The q_proj module is a Linear layer and will be analyzed independently. Reference the module with its fully qualified class name and input parameters. The hidden_states has shape (batch_size, seq_len, hidden_size), and q_proj projects to (batch_size, seq_len, num_heads * head_dim).
-- FLOPs: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
-- Memory Access: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads, head_dim)
+- Analysis: The q_proj module is a Linear layer (checked __init__: in_features=config.hidden_size, out_features=config.num_attention_heads * head_dim). Reference the module with its fully qualified class name and named parameters. The hidden_states has shape (batch_size, seq_len, hidden_size), and q_proj projects to (batch_size, seq_len, num_heads * head_dim).
+- FLOPs: ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.num_attention_heads}} * {{head_dim}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})
+- Memory Access: ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.num_attention_heads}} * {{head_dim}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})
 
 ---
 
@@ -305,11 +367,11 @@ Line 389: hidden_states = self.layer_norm(hidden_states) + residual
 ```
 - Kernel Type: composite
 - Operation: Layer normalization followed by element-wise addition with residual
-- Analysis: The layer_norm module (e.g., LlamaRMSNorm) will be analyzed independently. Here we count both the module reference and the element-wise addition. The output tensor has shape (batch_size, seq_len, hidden_size), requiring batch_size * seq_len * hidden_size additions for the residual connection.
-- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size
+- Analysis: The layer_norm module (LlamaRMSNorm, checked __init__: hidden_size from config) will be analyzed independently. Here we count both the module reference and the element-wise addition. The output tensor has shape (batch_size, seq_len, config.hidden_size), requiring batch_size * seq_len * hidden_size additions for the residual connection.
+- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(hidden_size={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}}
 - Memory Access:
-  - Read: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + 2 * batch_size * seq_len * hidden_size * a_bytes
-  - Write: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size * a_bytes
+  - Read: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(hidden_size={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + 2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}
+  - Write: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(hidden_size={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}
 
 ---
 
@@ -320,9 +382,9 @@ Line 275: attn_weights = attn_weights / math.sqrt(self.head_dim)
 ```
 - Kernel Type: basic
 - Operation: Element-wise division by scalar (scaling)
-- Analysis: The tensor attn_weights has shape (batch_size, num_heads, seq_len, cache_len). Element-wise division requires one division per element.
-- FLOPs: batch_size * num_heads * seq_len * cache_len
-- Memory Access: Read: batch_size * num_heads * seq_len * cache_len * a_bytes, Write: batch_size * num_heads * seq_len * cache_len * a_bytes
+- Analysis: The tensor attn_weights has shape (batch_size, num_heads, seq_len, cache_len + seq_len). Element-wise division requires one division per element. Note: head_dim is derived as config.hidden_size / config.num_attention_heads.
+- FLOPs: {{batch_size}} * {{config.num_attention_heads}} * {{seq_len}} * ({{cache_len}} + {{seq_len}})
+- Memory Access: Read: {{batch_size}} * {{config.num_attention_heads}} * {{seq_len}} * ({{cache_len}} + {{seq_len}}) * {{a_bytes}}, Write: {{batch_size}} * {{config.num_attention_heads}} * {{seq_len}} * ({{cache_len}} + {{seq_len}}) * {{a_bytes}}
 
 ---
 
@@ -364,17 +426,16 @@ Line 156: output = self.output_proj(self.dropout(self.activation(self.input_proj
 - Kernel Type: composite
 - Operation: Chained transformations with residual connection
 - Analysis: Break down what happens in THIS module:
-  - self.input_proj(x): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, intermediate_size)
-  - self.activation(...): SiLU activation → reference as ${{torch.nn.modules.activation.SiLU}}(batch_size, seq_len, intermediate_size)
-  - self.dropout(...): Dropout layer → reference as ${{torch.nn.modules.dropout.Dropout}}(batch_size, seq_len, intermediate_size)
-  - Addition (+): direct operation → COUNT IT (batch_size * seq_len * intermediate_size)
-  - self.output_proj(...): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, intermediate_size, hidden_size)
-  Both operands for addition have shape (batch_size, seq_len, intermediate_size).
+  - self.input_proj(x): Linear layer → ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.intermediate_size}}, ...)
+  - self.activation(...): SiLU activation → ${{torch.nn.SiLU}}(num_elements={{batch_size}} * {{seq_len}} * {{config.intermediate_size}})
+  - self.dropout(...): Dropout (no-op at inference) → 0
+  - Addition (+): direct operation → {{batch_size}} * {{seq_len}} * {{config.intermediate_size}}
+  - self.output_proj(...): Linear layer → ${{torch.nn.Linear}}(in_features={{config.intermediate_size}}, out_features={{config.hidden_size}}, ...)
   This is "composite" because it contains module calls with ${{...}} references.
-- FLOPs: ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, intermediate_size) + ${{torch.nn.modules.activation.SiLU}}(batch_size, seq_len, intermediate_size) + ${{torch.nn.modules.dropout.Dropout}}(batch_size, seq_len, intermediate_size) + batch_size * seq_len * intermediate_size + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, intermediate_size, hidden_size)
+- FLOPs: ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.intermediate_size}}, ...) + ${{torch.nn.SiLU}}(...) + {{batch_size}} * {{seq_len}} * {{config.intermediate_size}} + ${{torch.nn.Linear}}(in_features={{config.intermediate_size}}, out_features={{config.hidden_size}}, ...)
 - Memory Access:
-  - Read: ${{torch.nn.modules.linear.Linear}}(...) + ${{torch.nn.modules.activation.SiLU}}(...) + ${{torch.nn.modules.dropout.Dropout}}(...) + 2 * batch_size * seq_len * intermediate_size * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
-  - Write: ${{torch.nn.modules.linear.Linear}}(...) + ${{torch.nn.modules.activation.SiLU}}(...) + ${{torch.nn.modules.dropout.Dropout}}(...) + batch_size * seq_len * intermediate_size * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
+  - Read: (sum of module reads) + 2 * {{batch_size}} * {{seq_len}} * {{config.intermediate_size}} * {{a_bytes}}
+  - Write: (sum of module writes) + {{batch_size}} * {{seq_len}} * {{config.intermediate_size}} * {{a_bytes}}
 
 ---
 
@@ -385,11 +446,11 @@ Line 336: key = torch.cat((past_key, key), dim=-2)
 ```
 - Kernel Type: basic
 - Operation: Concatenate cached keys with new keys
-- Analysis: torch.cat creates a new tensor by copying data from both inputs. The past_key has shape (batch_size, num_heads, cache_len, head_dim) and key has shape (batch_size, num_heads, seq_len, head_dim). The output has shape (batch_size, num_heads, cache_len + seq_len, head_dim).
+- Analysis: torch.cat creates a new tensor by copying data from both inputs. past_key shape: (batch_size, num_heads, cache_len, head_dim), key shape: (batch_size, num_heads, seq_len, head_dim). Output shape: (batch_size, num_heads, cache_len + seq_len, head_dim). Note: head_dim = config.hidden_size / config.num_attention_heads.
 - FLOPs: 0 (concatenation is memory-only, no arithmetic)
 - Memory Access:
-  - Read: batch_size * num_heads * (cache_len + seq_len) * head_dim * a_bytes
-  - Write: batch_size * num_heads * (cache_len + seq_len) * head_dim * a_bytes
+  - Read: {{batch_size}} * {{config.num_attention_heads}} * ({{cache_len}} + {{seq_len}}) * ({{config.hidden_size}} / {{config.num_attention_heads}}) * {{a_bytes}}
+  - Write: {{batch_size}} * {{config.num_attention_heads}} * ({{cache_len}} + {{seq_len}}) * ({{config.hidden_size}} / {{config.num_attention_heads}}) * {{a_bytes}}
 
 ---
 
@@ -401,16 +462,15 @@ Line 203: result = self.proj_out(self.norm(features) * self.gate(features))
 - Kernel Type: composite
 - Operation: Gated projection with normalization
 - Analysis: In THIS module:
-  - self.norm(features): RMSNorm layer → reference as ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, feature_dim)
-  - self.gate(features): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, feature_dim)
-  - Multiplication (*): direct operation → COUNT IT (batch_size * seq_len * feature_dim)
-  - self.proj_out(...): Linear layer → reference as ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, output_dim)
-  Both operands for multiplication have shape (batch_size, seq_len, feature_dim).
+  - self.norm(features): RMSNorm → ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(hidden_size={{config.hidden_size}}, ...)
+  - self.gate(features): Linear → ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.hidden_size}}, ...)
+  - Multiplication (*): direct operation → {{batch_size}} * {{seq_len}} * {{config.hidden_size}}
+  - self.proj_out(...): Linear → ${{torch.nn.Linear}}(in_features={{config.hidden_size}}, out_features={{config.hidden_size}}, ...)
   This is "composite" because it contains module calls with ${{...}} references.
-- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, feature_dim) + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, feature_dim) + batch_size * seq_len * feature_dim + ${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, feature_dim, output_dim)
+- FLOPs: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...) + ${{torch.nn.Linear}}(...) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}} + ${{torch.nn.Linear}}(...)
 - Memory Access:
-  - Read: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...) + ${{torch.nn.modules.linear.Linear}}(...) + 2 * batch_size * seq_len * feature_dim * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
-  - Write: ${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(...) + ${{torch.nn.modules.linear.Linear}}(...) + batch_size * seq_len * feature_dim * a_bytes + ${{torch.nn.modules.linear.Linear}}(...)
+  - Read: (sum of module reads) + 2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}
+  - Write: (sum of module writes) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}
 </examples>
 
 <output_format>
@@ -447,29 +507,12 @@ Think of it as a detailed research paper showing your work, not just the results
 
 **{output_dir}/{module_name}.json (Phase 2)**
 - Formal JSON output following {working_dir}/{analysis_schema_file}
+- Read the schema file first to understand the required structure
 - Clean, structured, and concise
-- All formulas use standardized variable names
+- All formulas use variable names as defined in VARIABLE NAMING RULES
 - All memory access in bytes
 - Valid JSON format
 - Kernels in execution order
-
-Schema structure:
-{{
-  "class_name": "fully.qualified.ClassName",
-  "kernels": [
-    {{
-      "kernel_type": "basic" | "composite",
-      "operation": "brief description",
-      "analysis": "detailed explanation",
-      "flops": "formula",
-      "memory_access": {{
-        "read": "formula in bytes",
-        "write": "formula in bytes"
-      }}
-    }},
-    ...
-  ]
-}}
 </output_format>
 
 <summary>

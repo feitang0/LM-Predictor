@@ -31,6 +31,12 @@
             ],
             "description": "Whether this is a basic operation or a composite operation made of sub-kernels"
           },
+          "repeat": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Number of times this kernel repeats (e.g., 12 for transformer blocks). Defaults to 1 if not specified."
+          },
           "operation": {
             "type": "string",
             "description": "Human-readable description of what this kernel does"

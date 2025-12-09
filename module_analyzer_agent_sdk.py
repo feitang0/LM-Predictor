@@ -8,7 +8,7 @@ from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 import torch
 import transformers
 
-SEPARATOR = "-" * 32
+SEPARATOR = "=" * 64
 # DEFAULT_WORKING_DIR = "transformers"
 DISALLOWED_TOOLS: Final[list[str]] = [
     # "Task",
@@ -62,16 +62,16 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
     async for message in query(
         prompt=prompt,
         options=ClaudeAgentOptions(
-            disallowed_tools=DISALLOWED_TOOLS,
+            # disallowed_tools=DISALLOWED_TOOLS,
             permission_mode="acceptEdits",
             # model="haiku",
             # model="sonnet",
             cwd=working_dir,
             add_dirs=[transformers_dir, pytorch_dir, output_dir],
-            agents={},
+            # agents={},
         ),
     ):
-        # print(SEPARATOR)
+        print(SEPARATOR)
         if isinstance(message, ResultMessage):
             print(message.result)
         else:

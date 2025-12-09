@@ -47,6 +47,55 @@ Your responsibilities:
   * `{module_name}.json` - Fully expanded nested structure with NO `${{...}}` references
 
 The module analysis directory contains all available module analyses. If a referenced module analysis is not found there, you MUST stop.
+
+**CRITICAL: Composite Kernel Structure After Expansion**
+
+After expansion, kernels follow one of TWO valid structures:
+
+1. **Basic Kernel** (leaf node):
+   - Has explicit `flops` and `memory_access` formulas
+   - NO `sub_kernels` field
+   - NO `${{...}}` references in formulas
+   - Example:
+     ```json
+     {{
+       "kernel_type": "basic",
+       "operation": "Matrix multiplication",
+       "flops": "2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{config.vocab_size}}",
+       "memory_access": {{ "read": "...", "write": "..." }}
+     }}
+     ```
+
+2. **Composite Kernel** (parent node):
+   - Has `sub_kernels` array containing child kernels
+   - NO `flops` field
+   - NO `memory_access` field
+   - Optional `repeat` field for repeated operations
+   - Example:
+     ```json
+     {{
+       "kernel_type": "composite",
+       "operation": "Linear projection",
+       "sub_kernels": [
+         {{ "kernel_type": "basic", "flops": "...", ... }},
+         {{ "kernel_type": "basic", "flops": "...", ... }}
+       ]
+     }}
+     ```
+
+**INVALID Structure** (must be fixed):
+```json
+{{
+  "kernel_type": "composite",
+  "operation": "...",
+  "flops": "${{{{Module}}}}(...)",  // ← INVALID: Has both flops AND will have sub_kernels
+  "memory_access": {{ ... }},     // ← INVALID: Composite shouldn't have memory_access
+  "sub_kernels": [ ... ]         // ← INVALID: Can't have both formulas and sub_kernels
+}}
+```
+
+During expansion, when you replace a `${{...}}` reference, the parent kernel becomes composite
+and you REMOVE the flops/memory_access fields, replacing them with sub_kernels.
 </available_resources>
 
 <workflow>
@@ -129,9 +178,13 @@ Step 9: Generate Final Output
 **EXPANSION STRATEGY**
 
 Module Reference Format:
-- References use syntax: `${{fully.qualified.ClassName}}(param1, param2, ...)`
-- Example: `${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads * head_dim)`
-- The parameters in parentheses must be mapped to the referenced module's formula variables
+- References use NAMED PARAMETER syntax: `${{{{fully.qualified.ClassName}}}}(param1={{value1}}, param2={{value2}}, ...)`
+- Parameter names (LEFT side of =) match the callee module's __init__ parameters
+- Parameter values (RIGHT side of =) are expressions using caller's variables
+- Examples:
+  * `${{{{torch.nn.Linear}}}}(in_features={{config.hidden_size}}, out_features={{config.vocab_size}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})`
+  * `${{{{torch.nn.Embedding}}}}(num_embeddings={{config.vocab_size}}, embedding_dim={{config.n_embd}}, batch_size={{batch_size}}, seq_len={{seq_len}})`
+  * `${{{{transformers.pytorch_utils.Conv1D}}}}(nf=3 * {{config.hidden_size}}, nx={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}})`
 
 Expansion Process:
 1. Identify the reference pattern in a formula
@@ -143,25 +196,109 @@ Expansion Process:
 
 **PARAMETER SUBSTITUTION**
 
-When expanding `${{ClassName}}(param1, param2, ...)`:
+When expanding `${{{{ClassName}}}}(param1={{value1}}, param2={{value2}}, ...)`:
 
 1. **Identify Parameter Mapping**:
-   - Understand what each parameter represents
-   - Map to the referenced module's formula variables
-   - Common patterns:
-     * First params: batch dimensions (batch_size, seq_len)
-     * Middle params: input/output dimensions (hidden_size, intermediate_size)
-     * Last params: architectural params (num_heads, head_dim)
+   - Create a mapping dictionary from the named parameters: `{{param1: value1, param2: value2, ...}}`
+   - Example: `{{in_features: "{{config.hidden_size}}", out_features: "{{config.vocab_size}}", has_bias: "1"}}`
+   - LEFT side = callee's __init__ parameter names
+   - RIGHT side = caller's values (config variables, expressions, literals)
 
 2. **Perform Substitution**:
-   - Replace formula variables with actual parameter values
-   - Preserve mathematical expressions (e.g., `num_heads * head_dim` stays as-is)
-   - Maintain standardized variable names
+   - For each formula in the callee module's kernels
+   - Replace `{{param_name}}` with the corresponding value from the mapping
+   - Preserve the structure of expressions (don't evaluate)
+   - Example:
+     * Callee formula: `2 * {{batch_size}} * {{in_features}} * {{out_features}}`
+     * After substitution: `2 * {{batch_size}} * {{config.hidden_size}} * {{config.vocab_size}}`
 
-3. **Handle Complex Expressions**:
-   - If a reference appears in a sum: `${{Module}}(...) + direct_ops`
-   - Split into sub_kernels for module expansion, plus a sibling kernel for direct_ops
-   - Preserve operation order and grouping
+3. **Handle Boolean Parameters**:
+   - Convert boolean literals to numeric: `True` → `1`, `False` → `0`
+   - This ensures formulas remain purely numeric/variable for eval()
+
+4. **Handle Mixed Formulas**:
+   - If a formula contains BOTH module references AND direct operations:
+     ```
+     "{{config.num_layers}} * ${{{{Module}}}}(...) + extra_ops"
+     ```
+   - Split into:
+     * Repeat factor: Extract `{{config.num_layers}}` to separate `repeat` field
+     * Module reference expansion (creates composite with sub_kernels)
+     * Direct operations (create additional basic kernels)
+
+5. **Validation**:
+   - Verify all parameter names in the reference match the callee's __init__ parameters
+   - Verify all variables in callee's formulas have corresponding mappings
+   - If mismatches occur, document in the .md file
+
+**NAMED PARAMETER PARSING**
+
+When you encounter a module reference with named parameters:
+
+Step 1: Extract the reference pattern
+- Pattern: `${{{{ClassName}}}}(param1={{value1}}, param2={{value2}}, ...)`
+- Use regex or string parsing to extract:
+  * Fully qualified class name
+  * List of parameter mappings: [(param1, value1), (param2, value2), ...]
+
+Step 2: Parse each parameter mapping
+- LEFT side (parameter name): The callee module's __init__ parameter name
+- RIGHT side (value expression): The caller's variable/expression
+- Examples:
+  * `in_features={{config.hidden_size}}` → param="in_features", value="{{config.hidden_size}}"
+  * `nf=3 * {{config.hidden_size}}` → param="nf", value="3 * {{config.hidden_size}}"
+  * `has_bias=True` → param="has_bias", value="True" (will be converted to "1")
+
+Step 3: Read the callee module's analysis JSON
+- Find the JSON file in {module_analysis_dir}
+- Read all kernels from that module
+- Identify which variables the module uses (e.g., {{in_features}}, {{out_features}}, {{batch_size}})
+
+Step 4: Substitute parameters in formulas
+- For each kernel from the callee module:
+  * Find all variables in flops/memory_access formulas
+  * Replace each `{{param_name}}` with the corresponding value from the parameter mapping
+  * Preserve the expression structure (don't evaluate yet)
+  * Convert booleans: `True` → `1`, `False` → `0`
+
+Example:
+- Reference: `${{{{torch.nn.Linear}}}}(in_features={{config.hidden_size}}, out_features={{config.vocab_size}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})`
+- Linear.json formula: `"flops": "2 * {{batch_size}} * {{seq_len}} * {{in_features}} * {{out_features}} + {{has_bias}} * {{batch_size}} * {{out_features}}"`
+- After substitution: `"flops": "2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{config.vocab_size}} + 1 * {{batch_size}} * {{config.vocab_size}}"`
+
+**PARAMETER VALUE TYPES**
+
+When substituting parameter values, handle these types correctly:
+
+1. **Config Variables**: `{{config.attribute_name}}`
+   - Format: `{{config.xxx}}` where xxx is a config attribute
+   - Examples: `{{config.hidden_size}}`, `{{config.n_embd}}`, `{{config.vocab_size}}`
+   - Keep as-is during expansion (will be resolved during populate_template)
+   - Common config attributes:
+     * `{{config.hidden_size}}` or `{{config.n_embd}}` - Hidden dimension
+     * `{{config.num_attention_heads}}` or `{{config.n_head}}` - Number of heads
+     * `{{config.intermediate_size}}` or `{{config.n_inner}}` - MLP dimension
+     * `{{config.vocab_size}}` - Vocabulary size
+     * `{{config.num_hidden_layers}}` or `{{config.n_layer}}` - Number of layers
+     * `{{config.max_position_embeddings}}` or `{{config.n_positions}}` - Max sequence length
+     * `{{config.layer_norm_epsilon}}` or `{{config.layer_norm_eps}}` - Layer norm epsilon
+
+2. **Runtime Variables**: `{{variable_name}}`
+   - Standard runtime parameters (no config prefix)
+   - Examples: `{{batch_size}}`, `{{seq_len}}`, `{{cache_len}}`, `{{w_bytes}}`, `{{a_bytes}}`
+   - Keep as-is during expansion
+
+3. **Expressions**: Arithmetic combinations
+   - Examples: `3 * {{config.hidden_size}}`, `{{num_heads}} * {{head_dim}}`, `2 * {{seq_len}} + {{cache_len}}`
+   - Keep entire expression as-is during expansion
+   - Do NOT evaluate or simplify - preserve the formula structure
+
+4. **Literals**: Direct values
+   - Boolean values: Convert to numeric during expansion
+     * `True` → `1` (e.g., `{{has_bias}}=True` means `{{has_bias}}` → `1` in formulas)
+     * `False` → `0` (e.g., `{{has_bias}}=False` means `{{has_bias}}` → `0` in formulas)
+   - Numeric values: `1`, `0`, etc. - substitute directly
+   - This ensures the final JSON contains only numeric/variable parameters, not boolean literals
 
 **NESTED STRUCTURE CREATION**
 
@@ -205,7 +342,7 @@ When a formula contains BOTH module references AND direct operations:
 
 Original:
 ```
-"flops": "${{torch.nn.Linear}}(batch_size, seq_len, hidden_size, output_size) + batch_size * seq_len * output_size"
+"flops": "${{{{torch.nn.Linear}}}}(batch_size, seq_len, hidden_size, output_size) + batch_size * seq_len * output_size"
 ```
 
 After expansion:
@@ -296,53 +433,54 @@ Before completing expansion, verify EVERY item below. If ANY check fails, contin
 </analysis_rules>
 
 <examples>
-**Example 1: Simple Module Reference Expansion**
+**Example 1: Simple Module Reference Expansion with Named Parameters**
 
-Input kernel from {module_name} analysis:
+Input kernel from GPT2Model analysis:
 ```json
 {{
-  "kernel_type": "basic",
+  "kernel_type": "composite",
   "operation": "Query projection",
   "analysis": "Linear projection for query vectors",
-  "flops": "${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads * head_dim)",
+  "flops": "${{torch.nn.modules.linear.Linear}}(in_features={{config.hidden_size}}, out_features={{config.hidden_size}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})",
   "memory_access": {{
-    "read": "${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads * head_dim)",
-    "write": "${{torch.nn.modules.linear.Linear}}(batch_size, seq_len, hidden_size, num_heads * head_dim)"
+    "read": "${{torch.nn.modules.linear.Linear}}(in_features={{config.hidden_size}}, out_features={{config.hidden_size}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})",
+    "write": "${{torch.nn.modules.linear.Linear}}(in_features={{config.hidden_size}}, out_features={{config.hidden_size}}, has_bias=True, batch_size={{batch_size}}, seq_len={{seq_len}})"
   }}
 }}
 ```
 
-Step 1: Read `torch.nn.modules.linear.Linear.json`:
+Step 1: Parse named parameters from the reference
+- Extract parameter mappings:
+  * `in_features` → `{{config.hidden_size}}`
+  * `out_features` → `{{config.hidden_size}}`
+  * `has_bias` → `True` (will convert to `1`)
+  * `batch_size` → `{{batch_size}}`
+  * `seq_len` → `{{seq_len}}`
+
+Step 2: Read `torch.nn.modules.linear.Linear.json`:
 ```json
 {{
   "kernels": [
     {{
       "kernel_type": "basic",
-      "operation": "Matrix multiplication",
-      "analysis": "Core matmul operation",
-      "flops": "2 * batch_size * seq_len * in_features * out_features",
+      "operation": "Matrix multiplication with optional bias addition",
+      "flops": "2 * {{batch_size}} * {{in_features}} * {{out_features}} + {{has_bias}} * {{batch_size}} * {{out_features}}",
       "memory_access": {{
-        "read": "batch_size * seq_len * in_features * a_bytes + in_features * out_features * w_bytes",
-        "write": "batch_size * seq_len * out_features * a_bytes"
-      }}
-    }},
-    {{
-      "kernel_type": "basic",
-      "operation": "Bias addition",
-      "analysis": "Add bias vector",
-      "flops": "batch_size * seq_len * out_features",
-      "memory_access": {{
-        "read": "batch_size * seq_len * out_features * a_bytes + out_features * w_bytes",
-        "write": "batch_size * seq_len * out_features * a_bytes"
+        "read": "{{batch_size}} * {{in_features}} * {{a_bytes}} + {{out_features}} * {{in_features}} * {{w_bytes}} + {{has_bias}} * {{out_features}} * {{w_bytes}}",
+        "write": "{{batch_size}} * {{out_features}} * {{a_bytes}}"
       }}
     }}
   ]
 }}
 ```
 
-Step 2: Perform parameter substitution:
-- `in_features` → `hidden_size`
-- `out_features` → `num_heads * head_dim`
+Step 3: Substitute parameters in formulas
+- Replace `{{batch_size}}` → keep as `{{batch_size}}` (already matches)
+- Replace `{{seq_len}}` → keep as `{{seq_len}}` (already matches)
+- Replace `{{in_features}}` → `{{config.hidden_size}}`
+- Replace `{{out_features}}` → `{{config.hidden_size}}`
+- Replace `{{has_bias}}` → `1` (True converted to numeric)
+- Note: Boolean `True` → `1`, `False` → `0` to keep formulas numeric
 
 Expanded output:
 ```json
@@ -353,22 +491,11 @@ Expanded output:
   "sub_kernels": [
     {{
       "kernel_type": "basic",
-      "operation": "Matrix multiplication",
-      "analysis": "Core matmul operation",
-      "flops": "2 * batch_size * seq_len * hidden_size * num_heads * head_dim",
+      "operation": "Matrix multiplication with optional bias addition",
+      "flops": "2 * {{batch_size}} * {{config.hidden_size}} * {{config.hidden_size}} + 1 * {{batch_size}} * {{config.hidden_size}}",
       "memory_access": {{
-        "read": "batch_size * seq_len * hidden_size * a_bytes + hidden_size * num_heads * head_dim * w_bytes",
-        "write": "batch_size * seq_len * num_heads * head_dim * a_bytes"
-      }}
-    }},
-    {{
-      "kernel_type": "basic",
-      "operation": "Bias addition",
-      "analysis": "Add bias vector",
-      "flops": "batch_size * seq_len * num_heads * head_dim",
-      "memory_access": {{
-        "read": "batch_size * seq_len * num_heads * head_dim * a_bytes + num_heads * head_dim * w_bytes",
-        "write": "batch_size * seq_len * num_heads * head_dim * a_bytes"
+        "read": "{{batch_size}} * {{config.hidden_size}} * {{a_bytes}} + {{config.hidden_size}} * {{config.hidden_size}} * {{w_bytes}} + 1 * {{config.hidden_size}} * {{w_bytes}}",
+        "write": "{{batch_size}} * {{config.hidden_size}} * {{a_bytes}}"
       }}
     }}
   ]
@@ -377,7 +504,154 @@ Expanded output:
 
 ---
 
-**Example 2: Expansion with Additional Direct Operations**
+**Example 2: Named Parameters with Expressions**
+
+Input kernel from GPT2Attention:
+```json
+{{
+  "kernel_type": "composite",
+  "operation": "Combined QKV projection",
+  "analysis": "Projects input to query, key, and value in one operation",
+  "flops": "${{transformers.pytorch_utils.Conv1D}}(nf=3 * {{config.hidden_size}}, nx={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}})",
+  "memory_access": {{
+    "read": "${{transformers.pytorch_utils.Conv1D}}(nf=3 * {{config.hidden_size}}, nx={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}})",
+    "write": "${{transformers.pytorch_utils.Conv1D}}(nf=3 * {{config.hidden_size}}, nx={{config.hidden_size}}, batch_size={{batch_size}}, seq_len={{seq_len}})"
+  }}
+}}
+```
+
+Step 1: Parse named parameters (note the expression in nf!)
+- Extract parameter mappings:
+  * `nf` → `3 * {{config.hidden_size}}` (expression!)
+  * `nx` → `{{config.hidden_size}}`
+  * `batch_size` → `{{batch_size}}`
+  * `seq_len` → `{{seq_len}}`
+
+Step 2: Read `transformers.pytorch_utils.Conv1D.json`:
+```json
+{{
+  "kernels": [
+    {{
+      "kernel_type": "basic",
+      "operation": "1D convolution (implemented as matmul)",
+      "analysis": "Performs weight @ input.T, equivalent to Linear but with transposed weight",
+      "flops": "2 * {{batch_size}} * {{seq_len}} * {{nx}} * {{nf}}",
+      "memory_access": {{
+        "read": "{{batch_size}} * {{seq_len}} * {{nx}} * {{a_bytes}} + {{nf}} * {{nx}} * {{w_bytes}}",
+        "write": "{{batch_size}} * {{seq_len}} * {{nf}} * {{a_bytes}}"
+      }}
+    }}
+  ]
+}}
+```
+
+Step 3: Substitute parameters (preserve expressions!)
+- Replace `{{nf}}` → `3 * {{config.hidden_size}}` (keep entire expression as-is)
+- Replace `{{nx}}` → `{{config.hidden_size}}`
+- Replace `{{batch_size}}` → keep as `{{batch_size}}`
+- Replace `{{seq_len}}` → keep as `{{seq_len}}`
+- Result formula: `"2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * 3 * {{config.hidden_size}}"`
+- Note: Do NOT evaluate `3 * {{config.hidden_size}}` - it will be evaluated during populate_template
+
+Expanded output:
+```json
+{{
+  "kernel_type": "composite",
+  "operation": "Combined QKV projection",
+  "sub_kernels": [
+    {{
+      "kernel_type": "basic",
+      "operation": "1D convolution (implemented as matmul)",
+      "analysis": "Performs weight @ input.T, equivalent to Linear but with transposed weight",
+      "flops": "2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * 3 * {{config.hidden_size}}",
+      "memory_access": {{
+        "read": "{{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}} + 3 * {{config.hidden_size}} * {{config.hidden_size}} * {{w_bytes}}",
+        "write": "{{batch_size}} * {{seq_len}} * 3 * {{config.hidden_size}} * {{a_bytes}}"
+      }}
+    }}
+  ]
+}}
+```
+
+---
+
+**Example 3: Repeat Factor with Module Reference**
+
+Input kernel from GPT2Model:
+```json
+{{
+  "kernel_type": "composite",
+  "operation": "Transformer blocks",
+  "analysis": "Repeated transformer block processing",
+  "flops": "{{config.num_hidden_layers}} * ${{transformers.models.gpt2.modeling_gpt2.GPT2Block}}(hidden_size={{config.hidden_size}}, num_attention_heads={{config.num_attention_heads}}, layer_norm_epsilon={{config.layer_norm_epsilon}}, inner_dim={{config.n_inner}}, batch_size={{batch_size}}, seq_len={{seq_len}}, cache_len={{cache_len}})",
+  "memory_access": {{
+    "read": "{{config.num_hidden_layers}} * ${{transformers.models.gpt2.modeling_gpt2.GPT2Block}}(...)",
+    "write": "{{config.num_hidden_layers}} * ${{transformers.models.gpt2.modeling_gpt2.GPT2Block}}(...)"
+  }}
+}}
+```
+
+Step 1: Identify repeat factor
+- Pattern: `{{config.num_hidden_layers}} * ${{...}}`
+- Repeat factor: `{{config.num_hidden_layers}}`
+- Module reference: `${{transformers.models.gpt2.modeling_gpt2.GPT2Block}}(...)`
+
+Step 2: Parse named parameters from GPT2Block reference
+- Extract parameter mappings:
+  * `hidden_size` → `{{config.hidden_size}}`
+  * `num_attention_heads` → `{{config.num_attention_heads}}`
+  * `layer_norm_epsilon` → `{{config.layer_norm_epsilon}}`
+  * `inner_dim` → `{{config.n_inner}}`
+  * `batch_size` → `{{batch_size}}`
+  * `seq_len` → `{{seq_len}}`
+  * `cache_len` → `{{cache_len}}`
+
+Step 3: Expand the module reference (for ONE block)
+- Read `GPT2Block.json`
+- Substitute parameters in all GPT2Block kernels
+- Create sub_kernels array with expanded kernels
+
+Step 4: Add repeat field to the composite kernel
+- Set `"repeat": "{{config.num_hidden_layers}}"`
+- This tells populate_template to multiply FLOPs/memory by the repeat count
+- Remove the repeat factor from the formula (it's now in the repeat field)
+
+Expanded output:
+```json
+{{
+  "kernel_type": "composite",
+  "operation": "Transformer blocks",
+  "analysis": "Repeated transformer block processing",
+  "repeat": "{{config.num_hidden_layers}}",
+  "sub_kernels": [
+    {{
+      "kernel_type": "composite",
+      "operation": "Self-attention",
+      "sub_kernels": [
+        {{ "kernel_type": "basic", "operation": "Combined QKV projection", "flops": "...", ... }},
+        {{ "kernel_type": "basic", "operation": "Attention scores", "flops": "...", ... }},
+        {{ "kernel_type": "basic", "operation": "Attention output", "flops": "...", ... }}
+      ]
+    }},
+    {{
+      "kernel_type": "composite",
+      "operation": "Feed-forward MLP",
+      "sub_kernels": [
+        {{ "kernel_type": "basic", "operation": "MLP expansion", "flops": "...", ... }},
+        {{ "kernel_type": "basic", "operation": "MLP projection", "flops": "...", ... }}
+      ]
+    }}
+  ]
+}}
+```
+
+Note: The repeat field will be multiplied during populate_template:
+- total_flops = sum(sub_kernel_flops) * eval(repeat)
+- If repeat = "{{config.num_hidden_layers}}" and config.num_hidden_layers = 12, then total_flops = (block_flops) * 12
+
+---
+
+**Example 4: Expansion with Additional Direct Operations**
 
 Input kernel:
 ```json
@@ -385,10 +659,10 @@ Input kernel:
   "kernel_type": "composite",
   "operation": "Layer norm with residual addition",
   "analysis": "Applies RMS normalization then adds residual",
-  "flops": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size",
+  "flops": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(normalized_shape={{config.hidden_size}}, eps={{config.layer_norm_epsilon}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}}",
   "memory_access": {{
-    "read": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + 2 * batch_size * seq_len * hidden_size * a_bytes",
-    "write": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(batch_size, seq_len, hidden_size) + batch_size * seq_len * hidden_size * a_bytes"
+    "read": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(normalized_shape={{config.hidden_size}}, eps={{config.layer_norm_epsilon}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + 2 * {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}",
+    "write": "${{transformers.models.llama.modeling_llama.LlamaRMSNorm}}(normalized_shape={{config.hidden_size}}, eps={{config.layer_norm_epsilon}}, batch_size={{batch_size}}, seq_len={{seq_len}}) + {{batch_size}} * {{seq_len}} * {{config.hidden_size}} * {{a_bytes}}"
   }}
 }}
 ```
