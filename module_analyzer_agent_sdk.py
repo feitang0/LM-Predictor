@@ -8,15 +8,15 @@ from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 import torch
 import transformers
 
-SEPARATOR = "=" * 64
+from utils import print_pretty_message
 # DEFAULT_WORKING_DIR = "transformers"
 DISALLOWED_TOOLS: Final[list[str]] = [
     # "Task",
     "Bash",
     # "Glob",
     # "Grep",
-    "Edit",  # Not needed - agent only writes new files, doesn't edit existing ones
-    "ExitPlanMode",
+    # "Edit",  # Not needed - agent only writes new files, doesn't edit existing ones
+    # "ExitPlanMode",
     # "Read",
     # "Write",
     "NotebookEdit",
@@ -62,7 +62,7 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
     async for message in query(
         prompt=prompt,
         options=ClaudeAgentOptions(
-            # disallowed_tools=DISALLOWED_TOOLS,
+            disallowed_tools=DISALLOWED_TOOLS,
             permission_mode="acceptEdits",
             # model="haiku",
             # model="sonnet",
@@ -71,13 +71,7 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
             # agents={},
         ),
     ):
-        print(SEPARATOR)
-        if isinstance(message, ResultMessage):
-            print(message.result)
-        else:
-            print(message)
-            # pass
-        # print()
+        print_pretty_message(message)
 
 
 def main() -> None:

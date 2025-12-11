@@ -213,7 +213,11 @@ class ModelAnalyzer:
             config_vars = re.findall(r'\{config\.(\w+)\}', result)
             for attr in config_vars:
                 if config and hasattr(config, attr):
-                    result = result.replace(f"{{config.{attr}}}", str(getattr(config, attr)))
+                    config_value = getattr(config, attr)
+                    # Handle special case: n_inner defaults to 4 * hidden_size if None
+                    if attr == 'n_inner' and config_value is None:
+                        config_value = 4 * getattr(config, 'hidden_size', 0)
+                    result = result.replace(f"{{config.{attr}}}", str(config_value))
                 else:
                     raise ValueError(f"Config attribute not found: config.{attr}")
 
@@ -293,6 +297,220 @@ class ModelAnalyzer:
 
         # Recursively populate and evaluate
         return self._populate_value(model_json, params, config=config)
+
+    def flatten_kernels(self, kernel: Dict[str, Any], repeat_multiplier: int = 1, path: str = "", variables: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """Recursively flatten nested kernel structure into a single-level list.
+
+        Args:
+            kernel: Kernel dict with kernel_type, operation, flops, memory_access, sub_kernels, repeat fields
+            repeat_multiplier: Cumulative repeat count from parent kernels
+            path: Hierarchical path string for debugging/tracing
+            variables: Variable dict for evaluating repeat formulas (batch_size, seq_len, config.*, etc.)
+
+        Returns:
+            List of flattened kernel dicts with:
+            - operation: str (operation description)
+            - path: str (hierarchical trace)
+            - flops_formula: str (original formula)
+            - mem_read_formula: str (original formula)
+            - mem_write_formula: str (original formula)
+            - repeat: int (total repeat multiplier)
+        """
+        # Evaluate repeat field if it exists (may be template like "{config.num_hidden_layers}")
+        repeat_count = 1
+        if "repeat" in kernel:
+            repeat_value = kernel["repeat"]
+            if isinstance(repeat_value, str) and "{" in repeat_value:
+                # Evaluate template variable
+                if variables:
+                    try:
+                        repeat_count = int(self._populate_value(repeat_value, variables, config=variables.get('_config'), is_formula=True))
+                    except Exception as e:
+                        print(f"Warning: Could not evaluate repeat formula '{repeat_value}': {e}")
+                        repeat_count = 1
+                else:
+                    # No variables provided, keep as-is (will be evaluated later)
+                    repeat_count = repeat_value
+            else:
+                repeat_count = int(repeat_value)
+
+        total_repeat = repeat_multiplier * repeat_count if isinstance(repeat_count, int) else repeat_multiplier
+
+        # Build path string
+        current_path = f"{path} > {kernel.get('operation', 'unknown')}" if path else kernel.get('operation', 'unknown')
+
+        if kernel.get("kernel_type") == "basic":
+            # Basic kernel - extract formulas and return as single item
+            return [{
+                "operation": kernel.get("operation", ""),
+                "analysis": kernel.get("analysis", ""),
+                "path": current_path,
+                "flops_formula": kernel.get("flops", "0"),
+                "mem_read_formula": kernel.get("memory_access", {}).get("read", "0"),
+                "mem_write_formula": kernel.get("memory_access", {}).get("write", "0"),
+                "repeat": total_repeat
+            }]
+        else:
+            # Composite kernel - recursively flatten sub_kernels
+            flat_list = []
+            for sub_kernel in kernel.get("sub_kernels", []):
+                flat_list.extend(self.flatten_kernels(sub_kernel, total_repeat, current_path, variables))
+            return flat_list
+
+    def analyze_kernel_json(
+        self,
+        kernel_json_path: str,
+        model_id: str,
+        batch_size: int,
+        seq_len: int,
+        cache_len: int = 0,
+        w_bytes: int = 2,
+        a_bytes: int = 2
+    ) -> Dict[str, Any]:
+        """Analyze kernel JSON file to calculate FLOPs and memory access.
+
+        Args:
+            kernel_json_path: Path to kernel JSON file (e.g., GPT2LMHeadModel.json)
+            model_id: HuggingFace model ID for loading config
+            batch_size: Batch size
+            seq_len: Sequence length
+            cache_len: KV cache length (0 for prefill, >0 for decode)
+            w_bytes: Weight precision in bytes (2 for fp16, 4 for fp32)
+            a_bytes: Activation precision in bytes
+
+        Returns:
+            Dictionary with:
+            - kernels: List of evaluated kernels with numeric FLOPs/memory values
+            - totals: Aggregate FLOPs and memory access
+            - parameters: Runtime parameters used
+        """
+        print(f"\n=== Analyzing Kernel JSON: {kernel_json_path} ===")
+        print(f"Model: {model_id}")
+        print(f"Parameters: batch_size={batch_size}, seq_len={seq_len}, cache_len={cache_len}, w_bytes={w_bytes}, a_bytes={a_bytes}")
+
+        # Load kernel JSON
+        with open(kernel_json_path, 'r') as f:
+            kernel_data = json.load(f)
+
+        # Load model config for {config.xxx} resolution
+        print(f"Loading model config from {model_id}...")
+        hf_token = os.getenv('HUGGINGFACE_HUB_TOKEN')
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=True, token=hf_token)
+        print(f"✓ Loaded {config.__class__.__name__}")
+
+        # Build variable dictionary for template substitution
+        variables = {
+            'batch_size': batch_size,
+            'seq_len': seq_len,
+            'cache_len': cache_len,
+            'w_bytes': w_bytes,
+            'a_bytes': a_bytes,
+            '_config': config  # Store config for _populate_value
+        }
+
+        # Flatten kernels
+        print(f"\nFlattening kernel hierarchy...")
+        flat_kernels = []
+        for kernel in kernel_data.get("kernels", []):
+            flat_kernels.extend(self.flatten_kernels(kernel, repeat_multiplier=1, path="", variables=variables))
+
+        print(f"✓ Flattened {len(flat_kernels)} basic kernels")
+
+        # Evaluate formulas for each kernel
+        print(f"\nEvaluating formulas...")
+        results = []
+        total_flops = 0
+        total_mem_read = 0
+        total_mem_write = 0
+
+        for i, kernel in enumerate(flat_kernels):
+            try:
+                # Evaluate formulas
+                flops = self._populate_value(kernel["flops_formula"], variables, config=config, is_formula=True)
+                mem_read = self._populate_value(kernel["mem_read_formula"], variables, config=config, is_formula=True)
+                mem_write = self._populate_value(kernel["mem_write_formula"], variables, config=config, is_formula=True)
+
+                # Apply repeat multiplier
+                repeat = kernel["repeat"]
+                if isinstance(repeat, str):
+                    # Evaluate if still a formula
+                    repeat = int(self._populate_value(repeat, variables, config=config, is_formula=True))
+
+                final_flops = flops * repeat
+                final_mem_read = mem_read * repeat
+                final_mem_write = mem_write * repeat
+
+                # Accumulate totals
+                total_flops += final_flops
+                total_mem_read += final_mem_read
+                total_mem_write += final_mem_write
+
+                # Store result
+                results.append({
+                    "kernel_id": i,
+                    "operation": kernel["operation"],
+                    "path": kernel["path"],
+                    "repeat": repeat,
+                    "flops": final_flops,
+                    "memory_read": final_mem_read,
+                    "memory_write": final_mem_write,
+                    "memory_total": final_mem_read + final_mem_write,
+                    # Keep formulas for debugging
+                    "flops_formula": kernel["flops_formula"],
+                    "mem_read_formula": kernel["mem_read_formula"],
+                    "mem_write_formula": kernel["mem_write_formula"]
+                })
+
+                # Print progress for significant operations
+                if final_flops > 0 or final_mem_read + final_mem_write > 0:
+                    def format_num(n):
+                        if n >= 1e12: return f"{n/1e12:.2f}T"
+                        elif n >= 1e9: return f"{n/1e9:.2f}G"
+                        elif n >= 1e6: return f"{n/1e6:.2f}M"
+                        elif n >= 1e3: return f"{n/1e3:.2f}K"
+                        else: return f"{n}"
+
+                    repeat_str = f" (×{repeat})" if repeat > 1 else ""
+                    print(f"  [{i+1}/{len(flat_kernels)}] {kernel['operation'][:60]}...{repeat_str}")
+                    print(f"      FLOPs={format_num(final_flops)}, Mem={format_num(final_mem_read + final_mem_write)}B")
+
+            except Exception as e:
+                print(f"  ⚠ Error evaluating kernel {i}: {kernel['operation'][:50]}... - {e}")
+                results.append({
+                    "kernel_id": i,
+                    "operation": kernel["operation"],
+                    "path": kernel["path"],
+                    "error": str(e),
+                    "flops_formula": kernel["flops_formula"],
+                    "mem_read_formula": kernel["mem_read_formula"],
+                    "mem_write_formula": kernel["mem_write_formula"]
+                })
+
+        # Summary
+        print(f"\n=== Analysis Summary ===")
+        print(f"Total Kernels Evaluated: {len(results)}")
+        print(f"Total FLOPs: {total_flops:,}")
+        print(f"Total Memory Read: {total_mem_read:,} bytes ({total_mem_read/1e9:.2f} GB)")
+        print(f"Total Memory Write: {total_mem_write:,} bytes ({total_mem_write/1e9:.2f} GB)")
+        print(f"Total Memory Access: {total_mem_read + total_mem_write:,} bytes ({(total_mem_read + total_mem_write)/1e9:.2f} GB)")
+
+        return {
+            "class_name": kernel_data.get("class_name", "unknown"),
+            "parameters": {
+                "batch_size": batch_size,
+                "seq_len": seq_len,
+                "cache_len": cache_len,
+                "w_bytes": w_bytes,
+                "a_bytes": a_bytes
+            },
+            "kernels": results,
+            "totals": {
+                "flops": total_flops,
+                "memory_read": total_mem_read,
+                "memory_write": total_mem_write,
+                "memory_total": total_mem_read + total_mem_write
+            }
+        }
 
     def _extract_all_layers_with_parameters_from_json(self, layers, parent_path="", repeat_multiplier=1):
         """
@@ -640,11 +858,44 @@ def main():
                        help='Populate template variables in model JSON and evaluate formulas')
     parser.add_argument('--cache_len', type=int, default=0,
                        help='KV cache length for decode phase (default: 0 for prefill)')
+    parser.add_argument('--analyze-kernels', type=str, default=None,
+                       help='Analyze kernel JSON file to calculate FLOPs and memory (provide path to kernel JSON)')
 
     args = parser.parse_args()
 
     try:
-        if args.analyze:
+        if args.analyze_kernels:
+            # Kernel analysis mode - requires model_id and kernel JSON path
+            if not args.model_id:
+                print("Error: --analyze-kernels requires --model_id")
+                return 1
+
+            analyzer = ModelAnalyzer()
+            results = analyzer.analyze_kernel_json(
+                kernel_json_path=args.analyze_kernels,
+                model_id=args.model_id,
+                batch_size=args.batch_size,
+                seq_len=args.seq_len,
+                cache_len=args.cache_len,
+                w_bytes=args.w_bit // 8,
+                a_bytes=args.a_bit // 8
+            )
+
+            # Save results if output specified
+            if args.output:
+                with open(args.output, 'w') as f:
+                    json.dump(results, f, indent=2)
+                print(f"\n✓ Results saved to: {args.output}")
+            else:
+                # Auto-generate output filename
+                import os.path
+                base_name = os.path.basename(args.analyze_kernels).replace('.json', '')
+                output_path = f"{base_name}_analysis_B{args.batch_size}_S{args.seq_len}_C{args.cache_len}.json"
+                with open(output_path, 'w') as f:
+                    json.dump(results, f, indent=2)
+                print(f"\n✓ Results saved to: {output_path}")
+
+        elif args.analyze:
             # Analysis mode requires model_json
             if not args.model_json:
                 print("Error: --analyze requires --model_json")

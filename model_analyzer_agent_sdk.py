@@ -8,14 +8,15 @@ from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 import torch
 import transformers
 
-SEPARATOR = "-" * 32
+from utils import print_pretty_message
 # DEFAULT_WORKING_DIR = "transformers"
 DISALLOWED_TOOLS: Final[list[str]] = [
     # "Task",
     "Bash",
+    "AgentOutputTool",
     # "Glob",
     # "Grep",
-    "ExitPlanMode",
+    # "ExitPlanMode",
     # "Read",
     # "Edit",
     # "Write",
@@ -64,19 +65,13 @@ async def module_analyze(module_name: str, working_dir: str, transformers_dir: s
             disallowed_tools=DISALLOWED_TOOLS,
             permission_mode="acceptEdits",
             # model="haiku",
-            model="sonnet",
+            # model="sonnet",
             cwd=working_dir,
             add_dirs=[transformers_dir, pytorch_dir, module_analysis_dir],
-            agents={},
+            # agents={},
         ),
     ):
-        # print(SEPARATOR)
-        if isinstance(message, ResultMessage):
-            print(message.result)
-        else:
-            print(message)
-            # pass
-        # print()
+        print_pretty_message(message)
 
 
 def main() -> None:
