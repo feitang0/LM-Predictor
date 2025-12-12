@@ -1,54 +1,28 @@
-# CLAUDE.md
+# LM-Predictor
+LM-Predictor is a Model FLOP/Memory Analysis System that uses AI agents to automatically analyze neural network modules and compute computational costs (FLOPs) and memory access patterns. 
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-@docs/DESIGN.md
-
-## Important Instructions
-
-- Never write or modify code unless explicitly requested by the user.
-
-## Quick Start
-
-LM-Predictor is a Model FLOP/Memory Analysis System that uses AI agents to automatically analyze neural network modules and compute computational costs (FLOPs) and memory access patterns.
-
-### Essential Commands
-
-**Analyze a single module:**
-```bash
-uv run python module_analyzer_agent_sdk.py \
-  --module "transformers.models.llama.modeling_llama.LlamaRMSNorm" \
-  --transformers ./transformers \
-  --pytorch ./pytorch
-```
-
-**Expand module references:**
-```bash
-uv run python model_analyzer_agent_sdk.py \
-  --model "transformers.models.llama.modeling_llama.LlamaMLP" \
-  --transformers ./transformers \
-  --pytorch ./pytorch \
-  --module-analysis ./analysis_results
-```
-
-**Inspect model architecture:**
-```bash
-uv run python model_analyzer.py \
-  --model_id "meta-llama/Llama-3.1-8B"
-```
+## Critical Notes
+- Never write code unless explicitly requested by the user, prefer to give guidelines first.
 
 ## Key Files
-
+- `docs/DESIGN.md`: The design of this repo.
 - `module_analyzer_agent_sdk.py`: Module analysis script
-- `model_analyzer_agent_sdk.py`: Reference expansion script
-- `model_analyzer.py`: Model structure inspection
+- `model_analyzer_agent_sdk.py`: Model analysis
+- `model_analyzer.py`: Main entry
 - `module_analysis_schema.json`: Analysis output schema
 - `prompts/`: Prompt templates for analysis
+- `modules/`: Module analysis dir
+- `models/`: Model analysis dir
+
+## Common Workflows
+
+1. **Show Model Architecture**: Use `model_analyzer.py` with a HuggingFace model ID (e.g., `openai-community/gpt2`) to show its model architecture
+2. **Analyze Individual Modules**: Use `module_analyzer_agent_sdk.py` to analyze each module from the model
+3. **Aggregate Module Analysis**: Use `model_analyzer_agent_sdk.py` to aggregate all individual modules into a model analysis
+4. **Calculate FLOPs/Memory**: Use `model_analyzer.py` to calculate the FLOPs/memory access according to the analyzed model
 
 ## External Dependencies
 
-- **transformers/** submodule: HuggingFace Transformers source
-- **pytorch/** submodule: PyTorch source
-- Uses `uv` for Python environment management
-
-For detailed architecture, development guidelines, and complete workflow, see the design documentation via the import above.
+- **transformers/** submodule: HuggingFace Transformers source code for deep model introspection
+- **pytorch/** submodule: PyTorch source code for understanding low-level operations
+- Use `uv` for Python environment management
