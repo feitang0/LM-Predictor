@@ -78,24 +78,11 @@ def extract_model_params(config) -> Dict[str, Any]:
 class ModelAnalyzer:
     """Modular model analyzer using meta device and module database."""
 
-    def __init__(self, model_id: str = None, model_json_path: str = None):
+    def __init__(self, model_id: str = None):
         """Initialize analyzer with model ID and/or model JSON path."""
         self.model_id = model_id
-        self.model_json_path = model_json_path
         self.model = None
         self.config = None
-
-        # If model_json_path is provided, extract model_id from JSON for display
-        if model_json_path:
-            try:
-                with open(model_json_path, 'r') as f:
-                    model_structure = json.load(f)
-                if not model_id:  # Only override if model_id not explicitly provided
-                    self.model_id = model_structure.get("model_id", "unknown")
-            except Exception as e:
-                print(f"Warning: Could not extract model_id from JSON: {e}")
-                if not model_id:
-                    self.model_id = "unknown"
 
     def load_model_architecture(self) -> None:
         """Load model architecture on meta device without weights."""
@@ -105,6 +92,7 @@ class ModelAnalyzer:
         hf_token = os.getenv('HUGGINGFACE_HUB_TOKEN')
         self.config = AutoConfig.from_pretrained(
             self.model_id,
+            cache_dir="./cache",
             trust_remote_code=True,
             token=hf_token
         )
@@ -120,7 +108,7 @@ class ModelAnalyzer:
         print(self.config)
         print(f"\nModel Structure:")
         print(self.model)
-        self.print_enhanced_model()
+        # self.print_enhanced_model()
 
     def collect_module_classes(self, module, classes=None):
         """Collect all unique module classes in the model."""
@@ -222,28 +210,33 @@ class ModelAnalyzer:
                     raise ValueError(f"Config attribute not found: config.{attr}")
 
             # Handle regular params
-            for name, val in params.items():
-                result = result.replace(f"{{{name}}}", str(val))
+            # for name, val in params.items():
+            #     result = result.replace(f"{{{name}}}", str(val))
 
             # Check for remaining unresolved variables
             remaining = re.findall(r'\{[\w.]+\}', result)
             if remaining:
-                raise ValueError(f"Unresolved template variables: {remaining}")
+                for variable in remaining:
+                    if variable.startswith("config."):
+                        raise ValueError(f"Unresolved template variables: {remaining}")
 
-            # Try to evaluate arithmetic expression
-            try:
-                evaluated = eval(result)
-                # Return as int if it's a whole number, otherwise as-is
-                if isinstance(evaluated, float) and evaluated.is_integer():
-                    return int(evaluated)
-                return evaluated
-            except:
-                return result  # Return as-is if not evaluatable (e.g., pure strings)
+            # # Try to evaluate arithmetic expression
+            # try:
+            #     evaluated = eval(result)
+            #     # Return as int if it's a whole number, otherwise as-is
+            #     if isinstance(evaluated, float) and evaluated.is_integer():
+            #         return int(evaluated)
+            #     return evaluated
+            # except:
+            #     return result  # Return as-is if not evaluatable (e.g., pure strings)
+            return result
 
         elif isinstance(value, dict):
             result = {}
             for k, v in value.items():
                 # Determine if this key contains a formula
+                if k in ('kernel_type', 'analysis'):
+                    continue
                 key_is_formula = k in ('flops', 'read', 'write')
                 result[k] = self._populate_value(v, params, config=config, is_formula=key_is_formula)
             return result
@@ -255,48 +248,36 @@ class ModelAnalyzer:
     def populate_template(
         self,
         model_json: Dict[str, Any],
-        batch_size: int,
-        seq_len: int,
-        cache_len: int = 0,
-        w_bytes: int = 2,
-        a_bytes: int = 2,
         config: Any = None,
-        config_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Populate template variables in model analysis JSON and evaluate to numbers.
+        """Populate template variables in model analysis JSON using model config.
 
         Args:
             model_json: Model analysis JSON with {variable} placeholders
-            batch_size: Batch size
-            seq_len: Sequence length
-            cache_len: KV cache length (default 0 for prefill)
-            w_bytes: Weight precision in bytes (default 2 for fp16)
-            a_bytes: Activation precision in bytes (default 2 for fp16)
             config: HuggingFace model config object for resolving {config.xxx} patterns
-            config_params: Additional params dict (legacy, for non-config variables)
 
         Returns:
-            JSON with all formulas evaluated to numeric values
+            JSON with 
 
         Raises:
             ValueError: If any template variable cannot be resolved
         """
         # Build complete parameter dictionary
-        params = {
-            # Runtime parameters
-            'batch_size': batch_size,
-            'seq_len': seq_len,
-            'cache_len': cache_len,
-            'w_bytes': w_bytes,
-            'a_bytes': a_bytes,
-        }
+        # params = {
+        #     # Runtime parameters
+        #     'batch_size': batch_size,
+        #     'seq_len': seq_len,
+        #     'cache_len': cache_len,
+        #     'w_bytes': w_bytes,
+        #     'a_bytes': a_bytes,
+        # }
 
         # Add additional parameters if provided
-        if config_params:
-            params.update(config_params)
+        # if config_params:
+        #     params.update(config_params)
 
         # Recursively populate and evaluate
-        return self._populate_value(model_json, params, config=config)
+        return self._populate_value(model_json, None, config=config)
 
     def flatten_kernels(self, kernel: Dict[str, Any], repeat_multiplier: int = 1, path: str = "", variables: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Recursively flatten nested kernel structure into a single-level list.
@@ -357,160 +338,6 @@ class ModelAnalyzer:
                 flat_list.extend(self.flatten_kernels(sub_kernel, total_repeat, current_path, variables))
             return flat_list
 
-    def analyze_kernel_json(
-        self,
-        kernel_json_path: str,
-        model_id: str,
-        batch_size: int,
-        seq_len: int,
-        cache_len: int = 0,
-        w_bytes: int = 2,
-        a_bytes: int = 2
-    ) -> Dict[str, Any]:
-        """Analyze kernel JSON file to calculate FLOPs and memory access.
-
-        Args:
-            kernel_json_path: Path to kernel JSON file (e.g., GPT2LMHeadModel.json)
-            model_id: HuggingFace model ID for loading config
-            batch_size: Batch size
-            seq_len: Sequence length
-            cache_len: KV cache length (0 for prefill, >0 for decode)
-            w_bytes: Weight precision in bytes (2 for fp16, 4 for fp32)
-            a_bytes: Activation precision in bytes
-
-        Returns:
-            Dictionary with:
-            - kernels: List of evaluated kernels with numeric FLOPs/memory values
-            - totals: Aggregate FLOPs and memory access
-            - parameters: Runtime parameters used
-        """
-        print(f"\n=== Analyzing Kernel JSON: {kernel_json_path} ===")
-        print(f"Model: {model_id}")
-        print(f"Parameters: batch_size={batch_size}, seq_len={seq_len}, cache_len={cache_len}, w_bytes={w_bytes}, a_bytes={a_bytes}")
-
-        # Load kernel JSON
-        with open(kernel_json_path, 'r') as f:
-            kernel_data = json.load(f)
-
-        # Load model config for {config.xxx} resolution
-        print(f"Loading model config from {model_id}...")
-        hf_token = os.getenv('HUGGINGFACE_HUB_TOKEN')
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=True, token=hf_token)
-        print(f"✓ Loaded {config.__class__.__name__}")
-
-        # Build variable dictionary for template substitution
-        variables = {
-            'batch_size': batch_size,
-            'seq_len': seq_len,
-            'cache_len': cache_len,
-            'w_bytes': w_bytes,
-            'a_bytes': a_bytes,
-            '_config': config  # Store config for _populate_value
-        }
-
-        # Flatten kernels
-        print(f"\nFlattening kernel hierarchy...")
-        flat_kernels = []
-        for kernel in kernel_data.get("kernels", []):
-            flat_kernels.extend(self.flatten_kernels(kernel, repeat_multiplier=1, path="", variables=variables))
-
-        print(f"✓ Flattened {len(flat_kernels)} basic kernels")
-
-        # Evaluate formulas for each kernel
-        print(f"\nEvaluating formulas...")
-        results = []
-        total_flops = 0
-        total_mem_read = 0
-        total_mem_write = 0
-
-        for i, kernel in enumerate(flat_kernels):
-            try:
-                # Evaluate formulas
-                flops = self._populate_value(kernel["flops_formula"], variables, config=config, is_formula=True)
-                mem_read = self._populate_value(kernel["mem_read_formula"], variables, config=config, is_formula=True)
-                mem_write = self._populate_value(kernel["mem_write_formula"], variables, config=config, is_formula=True)
-
-                # Apply repeat multiplier
-                repeat = kernel["repeat"]
-                if isinstance(repeat, str):
-                    # Evaluate if still a formula
-                    repeat = int(self._populate_value(repeat, variables, config=config, is_formula=True))
-
-                final_flops = flops * repeat
-                final_mem_read = mem_read * repeat
-                final_mem_write = mem_write * repeat
-
-                # Accumulate totals
-                total_flops += final_flops
-                total_mem_read += final_mem_read
-                total_mem_write += final_mem_write
-
-                # Store result
-                results.append({
-                    "kernel_id": i,
-                    "operation": kernel["operation"],
-                    "path": kernel["path"],
-                    "repeat": repeat,
-                    "flops": final_flops,
-                    "memory_read": final_mem_read,
-                    "memory_write": final_mem_write,
-                    "memory_total": final_mem_read + final_mem_write,
-                    # Keep formulas for debugging
-                    "flops_formula": kernel["flops_formula"],
-                    "mem_read_formula": kernel["mem_read_formula"],
-                    "mem_write_formula": kernel["mem_write_formula"]
-                })
-
-                # Print progress for significant operations
-                if final_flops > 0 or final_mem_read + final_mem_write > 0:
-                    def format_num(n):
-                        if n >= 1e12: return f"{n/1e12:.2f}T"
-                        elif n >= 1e9: return f"{n/1e9:.2f}G"
-                        elif n >= 1e6: return f"{n/1e6:.2f}M"
-                        elif n >= 1e3: return f"{n/1e3:.2f}K"
-                        else: return f"{n}"
-
-                    repeat_str = f" (×{repeat})" if repeat > 1 else ""
-                    print(f"  [{i+1}/{len(flat_kernels)}] {kernel['operation'][:60]}...{repeat_str}")
-                    print(f"      FLOPs={format_num(final_flops)}, Mem={format_num(final_mem_read + final_mem_write)}B")
-
-            except Exception as e:
-                print(f"  ⚠ Error evaluating kernel {i}: {kernel['operation'][:50]}... - {e}")
-                results.append({
-                    "kernel_id": i,
-                    "operation": kernel["operation"],
-                    "path": kernel["path"],
-                    "error": str(e),
-                    "flops_formula": kernel["flops_formula"],
-                    "mem_read_formula": kernel["mem_read_formula"],
-                    "mem_write_formula": kernel["mem_write_formula"]
-                })
-
-        # Summary
-        print(f"\n=== Analysis Summary ===")
-        print(f"Total Kernels Evaluated: {len(results)}")
-        print(f"Total FLOPs: {total_flops:,}")
-        print(f"Total Memory Read: {total_mem_read:,} bytes ({total_mem_read/1e9:.2f} GB)")
-        print(f"Total Memory Write: {total_mem_write:,} bytes ({total_mem_write/1e9:.2f} GB)")
-        print(f"Total Memory Access: {total_mem_read + total_mem_write:,} bytes ({(total_mem_read + total_mem_write)/1e9:.2f} GB)")
-
-        return {
-            "class_name": kernel_data.get("class_name", "unknown"),
-            "parameters": {
-                "batch_size": batch_size,
-                "seq_len": seq_len,
-                "cache_len": cache_len,
-                "w_bytes": w_bytes,
-                "a_bytes": a_bytes
-            },
-            "kernels": results,
-            "totals": {
-                "flops": total_flops,
-                "memory_read": total_mem_read,
-                "memory_write": total_mem_write,
-                "memory_total": total_mem_read + total_mem_write
-            }
-        }
 
     def _extract_all_layers_with_parameters_from_json(self, layers, parent_path="", repeat_multiplier=1):
         """
@@ -622,7 +449,7 @@ class ModelAnalyzer:
             Analysis results in legacy format
         """
         print(f"\n=== Analyzing {self.model_id} ===")
-        print(f"Parameters: B={batchsize}, S={seqlen}, w_bit={w_bit}, a_bit={a_bit}")
+        print(f"Parameters: B={batchsize}, S={seqlen}, K={cachelen}, w_bit={w_bit}, a_bit={a_bit}")
 
         # Load JSON model structure
         if not self.model_json_path:
@@ -842,6 +669,8 @@ def main():
                        help='Batch size (default: 1)')
     parser.add_argument('--seq_len', type=int, default=2048,
                        help='Sequence length (default: 2048)')
+    parser.add_argument('--cache_len', type=int, default=0,
+                       help='KV cache length for decode phase (default: 0 for prefill)')
     parser.add_argument('--w_bit', type=int, default=16,
                        help='Weight bit width (default: 16)')
     parser.add_argument('--a_bit', type=int, default=16,
@@ -852,16 +681,13 @@ def main():
                        help='Generate standardized model architecture JSON during inspection')
     parser.add_argument('--ensure-modules', action='store_true',
                        help='Ensure all modules needed by architecture are analyzed and generated')
-    parser.add_argument('--populate-arch', action='store_true',
-                       help='Populate parameters for architecture JSON (requires architecture to exist in models/)')
     parser.add_argument('--populate', action='store_true',
-                       help='Populate template variables in model JSON and evaluate formulas')
-    parser.add_argument('--cache_len', type=int, default=0,
-                       help='KV cache length for decode phase (default: 0 for prefill)')
+                       help='Populate template variables using model config')
     parser.add_argument('--analyze-kernels', type=str, default=None,
                        help='Analyze kernel JSON file to calculate FLOPs and memory (provide path to kernel JSON)')
 
     args = parser.parse_args()
+    model_id = args.model_id
 
     try:
         if args.analyze_kernels:
@@ -903,8 +729,9 @@ def main():
 
             analyzer = ModelAnalyzer(model_id=args.model_id, model_json_path=args.model_json)
             results = analyzer.analyze(
-                seqlen=args.seq_len,
                 batchsize=args.batch_size,
+                seqlen=args.seq_len,
+                cache_len=args.cache_len,
                 w_bit=args.w_bit,
                 a_bit=args.a_bit
             )
@@ -924,24 +751,15 @@ def main():
             with open(args.model_json, 'r') as f:
                 model_json = json.load(f)
 
-            # Load config if model_id provided
-            config = None
-            if args.model_id:
-                print(f"Loading model config: {args.model_id}")
-                analyzer = ModelAnalyzer(model_id=args.model_id)
-                analyzer.load_model_architecture()
-                config = analyzer.config
-                print(f"Loaded config: {config.__class__.__name__}")
+            # Load config
+            print(f"Loading model config: {args.model_id}")
+            analyzer = ModelAnalyzer(model_id=model_id)
+            analyzer.load_model_architecture()
+            config = analyzer.config
+            print(f"Loaded config: {config.__class__.__name__}")
 
-            # Create analyzer and populate template
-            analyzer = ModelAnalyzer(model_json_path=args.model_json)
             populated = analyzer.populate_template(
                 model_json=model_json,
-                batch_size=args.batch_size,
-                seq_len=args.seq_len,
-                cache_len=args.cache_len,
-                w_bytes=args.w_bit // 8,
-                a_bytes=args.a_bit // 8,
                 config=config
             )
 
@@ -1039,9 +857,6 @@ def main():
                         print(f"  - {cls}")
 
             if args.populate_arch:
-                # Populate parameters for architecture JSON
-                from populate_parameters_agent import PopulateParametersAgent
-
                 # Load architecture JSON from models/ directory
                 arch_path = f"models/{args.model_id.replace('/', '-')}.json"
                 if not os.path.exists(arch_path):
