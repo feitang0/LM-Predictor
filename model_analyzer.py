@@ -237,7 +237,7 @@ class ModelAnalyzer:
                 # Determine if this key contains a formula
                 if k in ('kernel_type', 'analysis'):
                     continue
-                key_is_formula = k in ('flops', 'read', 'write')
+                key_is_formula = k in ('flops', 'read', 'write', 'repeat')
                 result[k] = self._populate_value(v, params, config=config, is_formula=key_is_formula)
             return result
         elif isinstance(value, list):
@@ -432,7 +432,8 @@ class ModelAnalyzer:
                 "error": str(e)
             }
 
-    def analyze(self, seqlen: int, batchsize: int, w_bit: int = 16, a_bit: int = 16,
+
+def analyze(model_json: str, batchsize: int, seqlen: int, cachelen: int, w_bit: int = 16, a_bit: int = 16,
                 kv_bit: Optional[int] = None, **_) -> Dict[str, Any]:
         """
         Analyze model using JSON structure for layer-by-layer computation.
@@ -451,15 +452,16 @@ class ModelAnalyzer:
         print(f"\n=== Analyzing {self.model_id} ===")
         print(f"Parameters: B={batchsize}, S={seqlen}, K={cachelen}, w_bit={w_bit}, a_bit={a_bit}")
 
-        # Load JSON model structure
-        if not self.model_json_path:
-            raise ValueError("No model JSON path provided for analysis")
+        with open(model_json, 'r') as f:
+            model_structure = json.load(f)
 
-        try:
-            with open(self.model_json_path, 'r') as f:
-                model_structure = json.load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Model JSON not found: {self.model_json_path}")
+        kernels = model_structure["kernles"]
+        has_kernels = True
+        while has_kernels:
+            for kernel in kernels:
+
+        for kernel in model_structure["kernels"]:
+            if "sub_kernels" in kernel:
 
         # Extract all layers with parameters (basic + composite) from JSON
         layers_to_analyze = self._extract_all_layers_with_parameters_from_json(model_structure["layers"])
@@ -568,94 +570,6 @@ class ModelAnalyzer:
         return legacy_results
 
 
-def extract_basic_layer_classes(architecture: Dict[str, Any]) -> set[str]:
-    """
-    Recursively extract all unique basic layer class names from architecture.
-    Basic layers are those WITHOUT 'sub_layers' field.
-
-    Args:
-        architecture: Architecture JSON with layers structure
-
-    Returns:
-        Set of unique class names for basic layers
-    """
-    classes: set[str] = set()
-
-    def traverse(layer: Dict[str, Any]) -> None:
-        if "sub_layers" not in layer:
-            # Basic layer - add its class
-            class_name = layer.get("class", "")
-            if class_name:
-                classes.add(class_name)
-        else:
-            # Composite layer - recurse into sub_layers
-            for sub_layer in layer.get("sub_layers", []):
-                traverse(sub_layer)
-
-    for layer in architecture.get("layers", []):
-        traverse(layer)
-
-    return classes
-
-
-def extract_all_layer_classes(architecture: Dict[str, Any]) -> set[str]:
-    """
-    Recursively extract ALL unique layer class names from architecture.
-    Includes both basic layers (no sub_layers) and composite layers (with sub_layers).
-
-    Args:
-        architecture: Architecture JSON with layers structure
-
-    Returns:
-        Set of unique class names for all layers (basic + composite)
-    """
-    classes: set[str] = set()
-
-    def traverse(layer: Dict[str, Any]) -> None:
-        # Add this layer's class (whether basic or composite)
-        class_name = layer.get("class", "")
-        if class_name:
-            classes.add(class_name)
-
-        # Recurse into sub_layers if present
-        if "sub_layers" in layer:
-            for sub_layer in layer.get("sub_layers", []):
-                traverse(sub_layer)
-
-    for layer in architecture.get("layers", []):
-        traverse(layer)
-
-    return classes
-
-
-def find_layer_by_class(architecture: Dict[str, Any], class_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Find first layer in architecture matching the given class name.
-
-    Args:
-        architecture: Architecture JSON with layers structure
-        class_name: Full class name to search for
-
-    Returns:
-        Layer dictionary if found, None otherwise
-    """
-    def traverse(layer: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if layer.get("class") == class_name:
-            return layer
-        # Recurse into sub_layers if present
-        for sub_layer in layer.get("sub_layers", []):
-            result = traverse(sub_layer)
-            if result:
-                return result
-        return None
-
-    for layer in architecture.get("layers", []):
-        result = traverse(layer)
-        if result:
-            return result
-    return None
-
-
 def main():
     """Command-line interface for model analysis."""
     parser = argparse.ArgumentParser(description='Analyze LLM model FLOPs and memory using modular approach')
@@ -677,223 +591,64 @@ def main():
                        help='Activation bit width (default: 16)')
     parser.add_argument('--output', '-o', type=str, default=None,
                        help='Output file path (default: auto-generated)')
-    parser.add_argument('--generate-arch', action='store_true',
-                       help='Generate standardized model architecture JSON during inspection')
-    parser.add_argument('--ensure-modules', action='store_true',
-                       help='Ensure all modules needed by architecture are analyzed and generated')
     parser.add_argument('--populate', action='store_true',
                        help='Populate template variables using model config')
-    parser.add_argument('--analyze-kernels', type=str, default=None,
-                       help='Analyze kernel JSON file to calculate FLOPs and memory (provide path to kernel JSON)')
-
     args = parser.parse_args()
-    model_id = args.model_id
 
-    try:
-        if args.analyze_kernels:
-            # Kernel analysis mode - requires model_id and kernel JSON path
-            if not args.model_id:
-                print("Error: --analyze-kernels requires --model_id")
-                return 1
+    if args.analyze:
+        # Analysis mode requires model_json
+        if not args.model_json:
+            print("Error: --analyze requires --model_json")
+            return 1
 
-            analyzer = ModelAnalyzer()
-            results = analyzer.analyze_kernel_json(
-                kernel_json_path=args.analyze_kernels,
-                model_id=args.model_id,
-                batch_size=args.batch_size,
-                seq_len=args.seq_len,
-                cache_len=args.cache_len,
-                w_bytes=args.w_bit // 8,
-                a_bytes=args.a_bit // 8
-            )
+        # analyzer = ModelAnalyzer(model_id=args.model_id, model_json_path=args.model_json)
+        results = analyzer.analyze(
+            model_json=args.model_json,
+            batchsize=args.batch_size,
+            seqlen=args.seq_len,
+            cache_len=args.cache_len,
+            w_bit=args.w_bit,
+            a_bit=args.a_bit
+        )
 
-            # Save results if output specified
-            if args.output:
-                with open(args.output, 'w') as f:
-                    json.dump(results, f, indent=2)
-                print(f"\n✓ Results saved to: {args.output}")
-            else:
-                # Auto-generate output filename
-                import os.path
-                base_name = os.path.basename(args.analyze_kernels).replace('.json', '')
-                output_path = f"{base_name}_analysis_B{args.batch_size}_S{args.seq_len}_C{args.cache_len}.json"
-                with open(output_path, 'w') as f:
-                    json.dump(results, f, indent=2)
-                print(f"\n✓ Results saved to: {output_path}")
+        if args.output:
+            with open(args.output, 'w') as f:
+                json.dump(results, f, indent=2, default=str)
+            print(f"Analysis saved to: {args.output}")
 
-        elif args.analyze:
-            # Analysis mode requires model_json
-            if not args.model_json:
-                print("Error: --analyze requires --model_json")
-                return 1
+    elif args.populate:
+        # Populate template mode - requires model_json
+        if not args.model_json:
+            print("Error: --populate requires --model_json")
+            return 1
 
-            analyzer = ModelAnalyzer(model_id=args.model_id, model_json_path=args.model_json)
-            results = analyzer.analyze(
-                batchsize=args.batch_size,
-                seqlen=args.seq_len,
-                cache_len=args.cache_len,
-                w_bit=args.w_bit,
-                a_bit=args.a_bit
-            )
+        # Load model JSON
+        with open(args.model_json, 'r') as f:
+            model_json = json.load(f)
 
-            if args.output:
-                with open(args.output, 'w') as f:
-                    json.dump(results, f, indent=2, default=str)
-                print(f"Analysis saved to: {args.output}")
+        # Load config
+        print(f"Loading model config: {args.model_id}")
+        analyzer = ModelAnalyzer(model_id=args.model_id)
+        analyzer.load_model_architecture()
+        config = analyzer.config
+        print(f"Loaded config: {config.__class__.__name__}")
 
-        elif args.populate:
-            # Populate template mode - requires model_json
-            if not args.model_json:
-                print("Error: --populate requires --model_json")
-                return 1
+        populated = analyzer.populate_template(
+            model_json=model_json,
+            config=config
+        )
 
-            # Load model JSON
-            with open(args.model_json, 'r') as f:
-                model_json = json.load(f)
+        # Output
+        output_path = args.output or args.model_json.replace('.json', '_populated.json')
+        with open(output_path, 'w') as f:
+            json.dump(populated, f, indent=2)
+        print(f"Populated JSON saved to: {output_path}")
 
-            # Load config
-            print(f"Loading model config: {args.model_id}")
-            analyzer = ModelAnalyzer(model_id=model_id)
-            analyzer.load_model_architecture()
-            config = analyzer.config
-            print(f"Loaded config: {config.__class__.__name__}")
-
-            populated = analyzer.populate_template(
-                model_json=model_json,
-                config=config
-            )
-
-            # Output
-            output_path = args.output or args.model_json.replace('.json', '_populated.json')
-            with open(output_path, 'w') as f:
-                json.dump(populated, f, indent=2)
-            print(f"Populated JSON saved to: {output_path}")
-
-        else:
-            # Default: Inspection mode using model_id
-            analyzer = ModelAnalyzer(model_id=args.model_id)
-            analyzer.load_model_architecture()
-
-            if args.generate_arch:
-                # Generate architecture using enhanced model string
-                from model_architecture_agent import ModelArchitectureAgent
-
-                # Get enhanced model structure (with full class paths)
-                enhanced_structure = analyzer.get_enhanced_model_str()
-
-                # Use agent to generate architecture
-                agent = ModelArchitectureAgent()
-                architecture = agent.generate_architecture_with_agent(
-                    model_id=args.model_id,
-                    model_structure=enhanced_structure
-                )
-
-                # Save to models/ directory
-                os.makedirs("models", exist_ok=True)
-                output_path = f"models/{args.model_id.replace('/', '-')}.json"
-                with open(output_path, 'w') as f:
-                    json.dump(architecture, f, indent=2)
-                print(f"✓ Architecture saved to {output_path}")
-
-            if args.ensure_modules:
-                # Ensure all modules needed by architecture are analyzed and generated
-                from module_analyzer import ModuleAnalyzer as ModuleAnalyzerCore
-
-                # Load architecture JSON from models/ directory
-                arch_path = f"models/{args.model_id.replace('/', '-')}.json"
-                if not os.path.exists(arch_path):
-                    raise FileNotFoundError(
-                        f"Architecture JSON not found: {arch_path}\n"
-                        f"Run with --generate-arch first to create the architecture file."
-                    )
-
-                with open(arch_path, 'r') as f:
-                    architecture_json = json.load(f)
-
-                # Extract all layer classes (both basic and composite)
-                all_classes = extract_all_layer_classes(architecture_json)
-                print(f"\n=== Module Ensure ===")
-                print(f"Found {len(all_classes)} unique layer types (basic + composite)")
-
-                # Use ModuleAnalyzer to check and generate missing modules
-                module_analyzer = ModuleAnalyzerCore()
-
-                generated = []
-                cached = []
-                failed = []
-
-                for class_name in sorted(all_classes):
-                    print(f"\nChecking module: {class_name}")
-
-                    # Look up if this module has sub_layers in architecture
-                    layer_info = find_layer_by_class(architecture_json, class_name)
-                    sub_layers = layer_info.get('sub_layers', []) if layer_info else []
-
-                    if module_analyzer.is_cached(class_name):
-                        print(f"  ✓ Already in database")
-                        cached.append(class_name)
-                    else:
-                        print(f"  → Analyzing with agent...")
-                        try:
-                            # This will analyze AND generate the module
-                            # Pass sub_layers context for composite module detection
-                            module_analyzer.analyze_module(class_name, force=False, generate=True, sub_layers=sub_layers)
-                            print(f"  ✓ Analysis and generation complete")
-                            generated.append(class_name)
-                        except Exception as e:
-                            print(f"  ✗ Failed: {e}")
-                            failed.append(class_name)
-
-                # Summary
-                print(f"\n=== Module Ensure Summary ===")
-                print(f"Cached: {len(cached)}")
-                print(f"Generated: {len(generated)}")
-                if generated:
-                    for cls in generated:
-                        print(f"  - {cls}")
-                print(f"Failed: {len(failed)}")
-                if failed:
-                    for cls in failed:
-                        print(f"  - {cls}")
-
-            if args.populate_arch:
-                # Load architecture JSON from models/ directory
-                arch_path = f"models/{args.model_id.replace('/', '-')}.json"
-                if not os.path.exists(arch_path):
-                    raise FileNotFoundError(
-                        f"Architecture JSON not found: {arch_path}\n"
-                        f"Run with --generate-arch first to create the architecture file."
-                    )
-
-                with open(arch_path, 'r') as f:
-                    architecture_json = json.load(f)
-
-                # Get model config and enhanced structure (already in memory)
-                model_config = analyzer.config.to_dict()
-                enhanced_structure = analyzer.get_enhanced_model_str()
-
-                # Populate architecture using agent
-                # Runtime parameters (batch_size, seq_len, dtype_bytes) will be populated as templates
-                agent = PopulateParametersAgent()
-                populated_arch = agent.populate_architecture_with_agent(
-                    architecture_json=architecture_json,
-                    model_config=model_config,
-                    enhanced_model_structure=enhanced_structure
-                )
-
-                # Save populated architecture
-                output_path = f"models/{args.model_id.replace('/', '-')}_populated.json"
-                with open(output_path, 'w') as f:
-                    json.dump(populated_arch, f, indent=2)
-                print(f"✓ Populated architecture saved to {output_path}")
-                print(f"  Runtime parameters use template format: {{batch_size}}, {{seq_len}}, {{w_dtype_bytes}}, {{a_dtype_bytes}}")
-
-    except Exception as e:
-        print(f"Error: {e}")
-        return 1
-
-    return 0
+    else:
+        # Default: Inspection mode using model_id
+        analyzer = ModelAnalyzer(model_id=args.model_id)
+        analyzer.load_model_architecture()
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()
