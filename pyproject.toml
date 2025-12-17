@@ -3,7 +3,7 @@ name = "lm-predictor"
 version = "0.1.0"
 description = "Model FLOP/Memory Analysis System"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "transformers>=4.51.0",
     "torch>=2.7.1",
@@ -23,4 +23,56 @@ dependencies = [
     "claude-agent-sdk>=0.1.4",
     "accelerate>=1.12.0",
     "check-jsonschema>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.9",
+    "ty>=0.0.2",
+]
+
+[tool.ruff]
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "transformers",
+    "pytorch"
+]
+
+# Same as Black.
+line-length = 88
+indent-width = 4
+
+# Assume Python 3.12
+target-version = "py312"
+
+[tool.ty.src]
+exclude = [
+    "transformers",
+    "pytorch"
 ]
