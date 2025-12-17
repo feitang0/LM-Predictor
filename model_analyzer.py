@@ -8,10 +8,13 @@ import os
 import json
 import argparse
 import re
+import pprint
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 import torch
 from transformers import AutoModelForCausalLM, AutoConfig
+
+from hardware import HARDWARE
 
 load_dotenv()
 
@@ -433,7 +436,34 @@ class ModelAnalyzer:
             }
 
 
-def analyze(model_json: str, batchsize: int, seqlen: int, cachelen: int, w_bit: int = 16, a_bit: int = 16,
+def calc_kernel(kernel: Any, batchsize, seqlen, cachelen, w_bytes, a_bytes):
+    runtime_args = {
+            "batch_size": batchsize,
+            "seq_len": seqlen,
+            "cache_len": cachelen,
+            "w_bytes": w_bytes,
+            "a_bytes": a_bytes
+            }
+
+    repeat = kernel.get("repeat", 1)
+    if "sub_kernels" in kernel:
+        calced_kernels = {
+                "repeat": repeat,
+                "kernels": []
+                }
+        for sub_kernel in kernel["sub_kernels"]:
+            calced_kernels["kernels"].append(calc_kernel(sub_kernel, batchsize, seqlen, cachelen, w_bytes, a_bytes))
+        return calced_kernels
+    else:
+        return {
+                "repeat": repeat,
+                "flops": eval(kernel["flops"].format(**runtime_args)),
+                "read": eval(kernel["memory_access"]["read"].format(**runtime_args)),
+                "write": eval(kernel["memory_access"]["write"].format(**runtime_args))
+                }
+
+
+def analyze(model_json: str, batchsize: int, seqlen: int, cachelen: int, w_bit: int = 16, a_bit: int = 16, hardware: dict | None = None,
                 kv_bit: Optional[int] = None, **_) -> Dict[str, Any]:
         """
         Analyze model using JSON structure for layer-by-layer computation.
@@ -449,125 +479,72 @@ def analyze(model_json: str, batchsize: int, seqlen: int, cachelen: int, w_bit: 
         Returns:
             Analysis results in legacy format
         """
-        print(f"\n=== Analyzing {self.model_id} ===")
+        # print(f"\n=== Analyzing {self.model_id} ===")
         print(f"Parameters: B={batchsize}, S={seqlen}, K={cachelen}, w_bit={w_bit}, a_bit={a_bit}")
 
         with open(model_json, 'r') as f:
             model_structure = json.load(f)
 
-        kernels = model_structure["kernles"]
-        has_kernels = True
-        while has_kernels:
-            for kernel in kernels:
-
-        for kernel in model_structure["kernels"]:
-            if "sub_kernels" in kernel:
-
-        # Extract all layers with parameters (basic + composite) from JSON
-        layers_to_analyze = self._extract_all_layers_with_parameters_from_json(model_structure["layers"])
-
-        print(f"\nAnalyzing {len(layers_to_analyze)} layers (basic + composite):")
-
-        # Analyze each layer
         w_dtype_bytes = w_bit // 8
         a_dtype_bytes = a_bit // 8
-        results = []
 
-        for layer_info in layers_to_analyze:
-            analysis = self._analyze_layer(layer_info, batchsize, seqlen, w_dtype_bytes, a_dtype_bytes)
-            results.append(analysis)
+        calced_kernels = []
+        kernels = model_structure["kernels"]
+        for kernel in model_structure["kernels"]:
+            calced_kernels.append(calc_kernel(kernel, batchsize, seqlen, cachelen, w_dtype_bytes, a_dtype_bytes))
 
-            # Print progress with per-instance values and memory info
-            if analysis["flops"] > 0:
-                repeat_count = analysis['repeat_count']
-                # Calculate per-instance values
-                per_instance_flops = analysis['flops'] // repeat_count if repeat_count > 1 else analysis['flops']
-                per_instance_reads = analysis['memory_reads'] // repeat_count if repeat_count > 1 else analysis['memory_reads']
-                per_instance_writes = analysis['memory_writes'] // repeat_count if repeat_count > 1 else analysis['memory_writes']
-                per_instance_intermediates = analysis['memory_intermediates'] // repeat_count if repeat_count > 1 else analysis['memory_intermediates']
+        # Format with human-readable units
+        def format_bytes(b):
+            if b >= 1e9:
+                return f"{b/1e9:.2f}GB"
+            elif b >= 1e6:
+                return f"{b/1e6:.2f}MB"
+            elif b >= 1e3:
+                return f"{b/1e3:.2f}KB"
+            else:
+                return f"{b}B"
 
-                repeat_str = f" (×{repeat_count})" if repeat_count > 1 else ""
+        def format_flops(f):
+            if f >= 1e12:
+                return f"{f/1e12:.2f}T"
+            elif f >= 1e9:
+                return f"{f/1e9:.2f}G"
+            elif f >= 1e6:
+                return f"{f/1e6:.2f}M"
+            elif f >= 1e3:
+                return f"{f/1e3:.2f}K"
+            else:
+                return f"{f}"
 
-                # Format with human-readable units
-                def format_bytes(b):
-                    if b >= 1e9:
-                        return f"{b/1e9:.2f}GB"
-                    elif b >= 1e6:
-                        return f"{b/1e6:.2f}MB"
-                    elif b >= 1e3:
-                        return f"{b/1e3:.2f}KB"
-                    else:
-                        return f"{b}B"
+        kernel_id = 0
+        def pretty_print(kernels: list, depth: int = 0, prefix: str = "    "):
+            nonlocal kernel_id
+            
+            total_time = 0
+            for i, kernel in enumerate(kernels):
+                if "kernels" in kernel:
+                    repeat = int(kernel["repeat"])
+                    print(f"{prefix * depth}{repeat} x [")
+                    time = pretty_print(kernel["kernels"], depth + 1, prefix) * repeat
+                    print(f"{prefix * depth}]")
+                else:
+                    # This is an actual kernel
+                    flops = kernel['flops']
+                    read = kernel['read']
+                    write = kernel['write']
+                    repeat = int(kernel['repeat'])
+                    time = max(flops/hardware["FP16"]*1e6, (read+write)/hardware["bandwidth"]*1e6)
+                    # time = max(flops/hardware["FP16"], (read+write)/hardware["bandwidth"])
+                    print(f"{prefix * depth}{kernel_id},{format_flops(flops)},{format_bytes(read)},{format_bytes(write)},{time:.2f}µs,{repeat}")
+                    
+                    kernel_id += 1 
+                total_time += time
+            print(f"{prefix * depth}Total time: {total_time:.2f}µs")
+            return total_time
 
-                def format_flops(f):
-                    if f >= 1e12:
-                        return f"{f/1e12:.2f}T"
-                    elif f >= 1e9:
-                        return f"{f/1e9:.2f}G"
-                    elif f >= 1e6:
-                        return f"{f/1e6:.2f}M"
-                    elif f >= 1e3:
-                        return f"{f/1e3:.2f}K"
-                    else:
-                        return f"{f}"
+        pretty_print(calced_kernels, 0)
 
-                print(f"  ✓ {analysis['layer_path']}{repeat_str}: "
-                      f"FLOPs={format_flops(per_instance_flops)}, "
-                      f"Reads={format_bytes(per_instance_reads)}, "
-                      f"Writes={format_bytes(per_instance_writes)}, "
-                      f"Intermediates={format_bytes(per_instance_intermediates)}")
-
-        # Calculate totals
-        total_flops = sum(r["flops"] for r in results)
-        total_memory_reads = sum(r["memory_reads"] for r in results)
-        total_memory_writes = sum(r["memory_writes"] for r in results)
-        total_memory_intermediates = sum(r["memory_intermediates"] for r in results)
-
-        # Return legacy format for compatibility
-        legacy_results = {
-            "decode": {},
-            "prefill": {},
-            "total_results": {
-                "decode": {
-                    "OPs": total_flops,
-                    "memory_access": total_memory_reads + total_memory_writes + total_memory_intermediates,
-                    "load_weight": total_memory_reads,
-                    "load_act": 0,
-                    "store_act": total_memory_writes,
-                    "load_kv_cache": 0,
-                    "store_kv_cache": 0,
-                    "inference_time": total_flops / 1e12
-                },
-                "prefill": {
-                    "OPs": total_flops,
-                    "memory_access": total_memory_reads + total_memory_writes + total_memory_intermediates,
-                    "load_weight": total_memory_reads,
-                    "load_act": 0,
-                    "store_act": total_memory_writes,
-                    "load_kv_cache": 0,
-                    "store_kv_cache": 0,
-                    "inference_time": total_flops / 1e12
-                }
-            },
-            "json_based_results": {
-                "layer_analyses": results,
-                "totals": {
-                    "flops": total_flops,
-                    "memory_reads": total_memory_reads,
-                    "memory_writes": total_memory_writes,
-                    "memory_intermediates": total_memory_intermediates
-                },
-                "model_json_used": self.model_json_path
-            }
-        }
-
-        print(f"\n=== Analysis Summary ===")
-        print(f"Total FLOPs: {total_flops:,}")
-        print(f"Memory Reads: {total_memory_reads:,} bytes")
-        print(f"Memory Writes: {total_memory_writes:,} bytes")
-        print(f"Memory Intermediates: {total_memory_intermediates:,} bytes")
-
-        return legacy_results
+        return calced_kernels
 
 
 def main():
@@ -579,6 +556,8 @@ def main():
                        help='Path to model JSON file (required for --analyze)')
     parser.add_argument('--analyze', action='store_true',
                        help='Run FLOPs/memory analysis (requires --model_json)')
+    parser.add_argument('--hardware', type=str,
+                       help='Hardware to predict the peformace')
     parser.add_argument('--batch_size', type=int, default=1,
                        help='Batch size (default: 1)')
     parser.add_argument('--seq_len', type=int, default=2048,
@@ -601,15 +580,22 @@ def main():
             print("Error: --analyze requires --model_json")
             return 1
 
+        if args.hardware:
+            hardware = HARDWARE[args.hardware]
+        else:
+            hardware = None
+
         # analyzer = ModelAnalyzer(model_id=args.model_id, model_json_path=args.model_json)
-        results = analyzer.analyze(
+        results = analyze(
             model_json=args.model_json,
             batchsize=args.batch_size,
             seqlen=args.seq_len,
-            cache_len=args.cache_len,
+            cachelen=args.cache_len,
             w_bit=args.w_bit,
-            a_bit=args.a_bit
+            a_bit=args.a_bit,
+            hardware=hardware
         )
+        # pprint.pprint(results)
 
         if args.output:
             with open(args.output, 'w') as f:
