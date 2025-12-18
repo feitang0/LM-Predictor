@@ -7,3 +7,6 @@ tmp
 uv.lock
 .python-version
 SCRATCHPAD.md
+cache/
+models/
+modules/
