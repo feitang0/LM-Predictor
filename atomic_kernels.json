@@ -1,0 +1,346 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Leaf kernel catalog based on DeepSpeed profiler. FLOPs from DeepSpeed, memory formulas added.",
+
+  "matrix_operations": {
+    "F.linear": {
+      "parameters": ["M", "K", "N", "has_bias"],
+      "flops": "2 * M * K * N + M * N * has_bias",
+      "memory_read": "(M * K + K * N + N * has_bias) * bytes",
+      "memory_write": "M * N * bytes",
+      "description": "Linear layer: output = input @ weight.T + bias. M=batch*seq, K=in_features, N=out_features"
+    },
+    "torch.matmul": {
+      "parameters": ["M", "K", "N"],
+      "flops": "2 * M * K * N",
+      "memory_read": "(M * K + K * N) * bytes",
+      "memory_write": "M * N * bytes",
+      "description": "Matrix multiplication: (M, K) @ (K, N) -> (M, N)"
+    },
+    "torch.mm": {
+      "parameters": ["M", "K", "N"],
+      "flops": "2 * M * K * N",
+      "memory_read": "(M * K + K * N) * bytes",
+      "memory_write": "M * N * bytes",
+      "description": "2D matrix multiplication: (M, K) @ (K, N) -> (M, N)"
+    },
+    "torch.bmm": {
+      "parameters": ["B", "M", "K", "N"],
+      "flops": "2 * B * M * K * N",
+      "memory_read": "B * (M * K + K * N) * bytes",
+      "memory_write": "B * M * N * bytes",
+      "description": "Batched matrix multiplication: (B, M, K) @ (B, K, N) -> (B, M, N)"
+    },
+    "torch.addmm": {
+      "parameters": ["M", "K", "N"],
+      "flops": "2 * M * K * N + M * N",
+      "memory_read": "(M * K + K * N + M * N) * bytes",
+      "memory_write": "M * N * bytes",
+      "description": "Matrix multiply with add: beta*input + alpha*(mat1 @ mat2)"
+    },
+    "torch.baddbmm": {
+      "parameters": ["B", "M", "K", "N"],
+      "flops": "2 * B * M * K * N + B * M * N",
+      "memory_read": "B * (M * K + K * N + M * N) * bytes",
+      "memory_write": "B * M * N * bytes",
+      "description": "Batched matrix multiply with add: beta*input + alpha*(batch1 @ batch2)"
+    }
+  },
+
+  "activations": {
+    "F.relu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "ReLU activation: max(0, x)"
+    },
+    "F.prelu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "PReLU activation: max(0,x) + weight*min(0,x)"
+    },
+    "F.elu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "ELU activation: max(0,x) + min(0, alpha*(exp(x)-1))"
+    },
+    "F.leaky_relu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Leaky ReLU activation: max(0,x) + negative_slope*min(0,x)"
+    },
+    "F.relu6": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "ReLU6 activation: min(max(0,x), 6)"
+    },
+    "F.silu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "SiLU/Swish activation: x * sigmoid(x)"
+    },
+    "F.gelu": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "GELU activation: x * Phi(x)"
+    }
+  },
+
+  "normalizations": {
+    "F.layer_norm": {
+      "parameters": ["num_elements", "norm_size", "has_affine"],
+      "flops": "num_elements * (5 if has_affine else 4)",
+      "memory_read": "num_elements * bytes + (2 * norm_size * has_affine) * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Layer normalization. 5 ops/elem with affine: subtract mean, variance, normalize, scale, shift"
+    },
+    "F.batch_norm": {
+      "parameters": ["num_elements", "num_features", "has_affine", "training"],
+      "flops": "num_elements * (5 if has_affine else 4) if training else num_elements * (2 if has_affine else 1)",
+      "memory_read": "num_elements * bytes + (4 * num_features) * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Batch normalization. Inference uses running stats (fewer ops)."
+    },
+    "F.group_norm": {
+      "parameters": ["num_elements", "num_groups", "has_affine"],
+      "flops": "num_elements * (5 if has_affine else 4)",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Group normalization"
+    },
+    "F.instance_norm": {
+      "parameters": ["num_elements", "has_affine"],
+      "flops": "num_elements * (5 if has_affine else 4)",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Instance normalization"
+    }
+  },
+
+  "element_wise": {
+    "torch.add": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "2 * num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Element-wise addition"
+    },
+    "torch.mul": {
+      "parameters": ["num_elements"],
+      "flops": "num_elements",
+      "memory_read": "2 * num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Element-wise multiplication"
+    }
+  },
+
+  "special_operations": {
+    "F.softmax": {
+      "parameters": ["num_elements"],
+      "flops": "3 * num_elements",
+      "memory_read": "num_elements * bytes",
+      "memory_write": "num_elements * bytes",
+      "description": "Softmax: exp, sum, divide. DeepSpeed uses 1x, but 3x is more accurate."
+    },
+    "F.embedding": {
+      "parameters": ["num_lookups", "embed_dim"],
+      "flops": "0",
+      "memory_read": "num_lookups * 4 + num_lookups * embed_dim * bytes",
+      "memory_write": "num_lookups * embed_dim * bytes",
+      "description": "Embedding lookup: 0 FLOPs, just memory access. Index is 4 bytes (int32)."
+    },
+    "F.dropout": {
+      "parameters": [],
+      "flops": "0",
+      "memory_read": "0",
+      "memory_write": "0",
+      "description": "Dropout: no-op at inference"
+    },
+    "F.scaled_dot_product_attention": {
+      "parameters": ["B", "H", "S_q", "S_kv", "D"],
+      "flops": "2 * B * H * S_q * D * S_kv + 2 * B * H * S_q * S_kv * D",
+      "memory_read": "(B * H * S_q * D + B * H * S_kv * D + B * H * S_kv * D) * bytes",
+      "memory_write": "B * H * S_q * D * bytes",
+      "description": "Scaled dot-product attention: QK^T matmul + softmax*V matmul. B=batch, H=heads, S_q=query_len, S_kv=key_len, D=head_dim"
+    }
+  },
+
+  "pooling": {
+    "F.avg_pool1d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "1D average pooling"
+    },
+    "F.avg_pool2d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "2D average pooling"
+    },
+    "F.avg_pool3d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "3D average pooling"
+    },
+    "F.max_pool1d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "1D max pooling"
+    },
+    "F.max_pool2d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "2D max pooling"
+    },
+    "F.max_pool3d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "3D max pooling"
+    },
+    "F.adaptive_avg_pool1d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "1D adaptive average pooling"
+    },
+    "F.adaptive_avg_pool2d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "2D adaptive average pooling"
+    },
+    "F.adaptive_avg_pool3d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "3D adaptive average pooling"
+    },
+    "F.adaptive_max_pool1d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "1D adaptive max pooling"
+    },
+    "F.adaptive_max_pool2d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "2D adaptive max pooling"
+    },
+    "F.adaptive_max_pool3d": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "input_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "3D adaptive max pooling"
+    }
+  },
+
+  "convolutions": {
+    "F.conv1d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_size", "output_length", "groups", "has_bias"],
+      "flops": "2 * kernel_size * (in_channels / groups) * out_channels * batch_size * output_length + out_channels * batch_size * output_length * has_bias",
+      "memory_read": "(batch_size * in_channels * input_length + out_channels * in_channels / groups * kernel_size + out_channels * has_bias) * bytes",
+      "memory_write": "batch_size * out_channels * output_length * bytes",
+      "description": "1D convolution"
+    },
+    "F.conv2d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_h", "kernel_w", "output_h", "output_w", "groups", "has_bias"],
+      "flops": "2 * kernel_h * kernel_w * (in_channels / groups) * out_channels * batch_size * output_h * output_w + out_channels * batch_size * output_h * output_w * has_bias",
+      "memory_read": "(batch_size * in_channels * input_h * input_w + out_channels * in_channels / groups * kernel_h * kernel_w + out_channels * has_bias) * bytes",
+      "memory_write": "batch_size * out_channels * output_h * output_w * bytes",
+      "description": "2D convolution"
+    },
+    "F.conv3d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_d", "kernel_h", "kernel_w", "output_d", "output_h", "output_w", "groups", "has_bias"],
+      "flops": "2 * kernel_d * kernel_h * kernel_w * (in_channels / groups) * out_channels * batch_size * output_d * output_h * output_w + out_channels * batch_size * output_d * output_h * output_w * has_bias",
+      "memory_read": "varies",
+      "memory_write": "batch_size * out_channels * output_d * output_h * output_w * bytes",
+      "description": "3D convolution"
+    },
+    "F.conv_transpose1d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_size", "input_length", "groups", "has_bias"],
+      "flops": "2 * kernel_size * (in_channels / groups) * out_channels * batch_size * input_length",
+      "memory_read": "varies",
+      "memory_write": "varies",
+      "description": "1D transposed convolution"
+    },
+    "F.conv_transpose2d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_h", "kernel_w", "input_h", "input_w", "groups", "has_bias"],
+      "flops": "2 * kernel_h * kernel_w * (in_channels / groups) * out_channels * batch_size * input_h * input_w",
+      "memory_read": "varies",
+      "memory_write": "varies",
+      "description": "2D transposed convolution"
+    },
+    "F.conv_transpose3d": {
+      "parameters": ["batch_size", "in_channels", "out_channels", "kernel_d", "kernel_h", "kernel_w", "input_d", "input_h", "input_w", "groups", "has_bias"],
+      "flops": "2 * kernel_d * kernel_h * kernel_w * (in_channels / groups) * out_channels * batch_size * input_d * input_h * input_w",
+      "memory_read": "varies",
+      "memory_write": "varies",
+      "description": "3D transposed convolution"
+    }
+  },
+
+  "upsample": {
+    "F.upsample": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "output_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "Upsampling (deprecated, use interpolate)"
+    },
+    "F.interpolate": {
+      "parameters": ["input_elements", "output_elements"],
+      "flops": "output_elements",
+      "memory_read": "input_elements * bytes",
+      "memory_write": "output_elements * bytes",
+      "description": "Interpolation/upsampling"
+    }
+  },
+
+  "einsum": {
+    "torch.einsum": {
+      "parameters": ["equation", "operand_shapes"],
+      "flops": "dynamic",
+      "memory_read": "dynamic",
+      "memory_write": "dynamic",
+      "description": "Einstein summation. FLOPs computed via np.einsum_path at runtime."
+    },
+    "einops.einsum": {
+      "parameters": ["equation", "operand_shapes"],
+      "flops": "dynamic",
+      "memory_read": "dynamic",
+      "memory_write": "dynamic",
+      "description": "Einops einsum. FLOPs computed via np.einsum_path at runtime."
+    }
+  }
+}

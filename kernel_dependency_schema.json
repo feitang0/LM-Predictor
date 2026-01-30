@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Kernel Dependency Graph",
+  "description": "Schema for Stage 1 output: structural dependency graph from model to atomic kernels",
+  "type": "object",
+  "required": ["kernel_name", "kernel_type", "location"],
+  "properties": {
+    "kernel_name": {
+      "type": "string",
+      "description": "Fully qualified importable kernel name using shortest public API path (e.g., 'torch.nn.Linear', 'torch.nn.functional.linear', 'transformers.models.llama.modeling_llama.LlamaAttention')"
+    },
+    "kernel_type": {
+      "type": "string",
+      "enum": ["composite", "atomic"],
+      "description": "composite: has sub_kernels, calls other modules/ops. atomic: indivisible operation with known formula in atomic_kernels.json"
+    },
+    "multiplier": {
+      "type": "string",
+      "description": "Expression for multiplier if this kernel is called multiple times (e.g., 'config.num_hidden_layers')"
+    },
+    "sub_kernels": {
+      "type": "array",
+      "items": {
+        "$ref": "#"
+      },
+      "description": "Child kernels called by this kernel. Only present for composite type."
+    },
+    "location": {
+      "type": "string",
+      "description": "File path where this kernel is defined (e.g., 'transformers/models/llama/modeling_llama.py')"
+    },
+    "call_site": {
+      "type": "string",
+      "description": "Optional: where in the parent's forward() this kernel is called with line info (e.g., 'line 42: self.norm(x)' or 'lines 42-48: self.mlp(hidden_states)')"
+    }
+  },
+  "if": {
+    "properties": {
+      "kernel_type": { "const": "composite" }
+    }
+  },
+  "then": {
+    "required": ["sub_kernels"]
+  },
+  "examples": [
+    {
+      "kernel_name": "transformers.models.llama.modeling_llama.LlamaForCausalLM",
+      "kernel_type": "composite",
+      "location": "transformers/models/llama/modeling_llama.py",
+      "sub_kernels": [
+        {
+          "kernel_name": "transformers.models.llama.modeling_llama.LlamaModel",
+          "kernel_type": "composite",
+          "location": "transformers/models/llama/modeling_llama.py",
+          "call_site": "line 1024: self.model(input_ids, ...)",
+          "sub_kernels": [
+            {
+              "kernel_name": "torch.nn.Embedding",
+              "kernel_type": "atomic",
+              "location": "torch/nn/modules/sparse.py",
+              "call_site": "line 856: self.embed_tokens(input_ids)"
+            },
+            {
+              "kernel_name": "transformers.models.llama.modeling_llama.LlamaDecoderLayer",
+              "kernel_type": "composite",
+              "location": "transformers/models/llama/modeling_llama.py",
+              "multiplier": "config.num_hidden_layers",
+              "call_site": "lines 892-894: for decoder_layer in self.layers",
+              "sub_kernels": [
+                {
+                  "kernel_name": "transformers.models.llama.modeling_llama.LlamaAttention",
+                  "kernel_type": "composite",
+                  "location": "transformers/models/llama/modeling_llama.py",
+                  "call_site": "line 624: self.self_attn(hidden_states, ...)",
+                  "sub_kernels": [
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 412: self.q_proj(hidden_states)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 413: self.k_proj(hidden_states)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 414: self.v_proj(hidden_states)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.scaled_dot_product_attention",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 456: F.scaled_dot_product_attention(...)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 468: self.o_proj(attn_output)"
+                    }
+                  ]
+                },
+                {
+                  "kernel_name": "transformers.models.llama.modeling_llama.LlamaMLP",
+                  "kernel_type": "composite",
+                  "location": "transformers/models/llama/modeling_llama.py",
+                  "call_site": "line 632: self.mlp(hidden_states)",
+                  "sub_kernels": [
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 312: self.gate_proj(x)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 313: self.up_proj(x)"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.silu",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 314: F.silu(gate)"
+                    },
+                    {
+                      "kernel_name": "torch.mul",
+                      "kernel_type": "atomic",
+                      "location": "torch/_C/_VariableFunctions.pyi",
+                      "call_site": "line 315: gate * up"
+                    },
+                    {
+                      "kernel_name": "torch.nn.functional.linear",
+                      "kernel_type": "atomic",
+                      "location": "torch/nn/functional.py",
+                      "call_site": "line 316: self.down_proj(intermediate)"
+                    }
+                  ]
+                },
+                {
+                  "kernel_name": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
+                  "kernel_type": "atomic",
+                  "location": "transformers/models/llama/modeling_llama.py",
+                  "call_site": "line 622: self.input_layernorm(hidden_states)"
+                }
+              ]
+            },
+            {
+              "kernel_name": "transformers.models.llama.modeling_llama.LlamaRMSNorm",
+              "kernel_type": "atomic",
+              "location": "transformers/models/llama/modeling_llama.py",
+              "call_site": "line 912: self.norm(hidden_states)"
+            }
+          ]
+        },
+        {
+          "kernel_name": "torch.nn.functional.linear",
+          "kernel_type": "atomic",
+          "location": "torch/nn/functional.py",
+          "call_site": "line 1026: self.lm_head(hidden_states)"
+        }
+      ]
+    }
+  ]
+}

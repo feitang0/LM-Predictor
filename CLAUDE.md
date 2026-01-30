@@ -1,28 +1,39 @@
 # LM-Predictor
-LM-Predictor is a Model FLOP/Memory Analysis System that uses AI agents to automatically analyze neural network modules and compute computational costs (FLOPs) and memory access patterns. 
+LM-Predictor is a Deep Learning Model FLOPs/Memory cost analysis system. It first builds a kernel dependency graph from top-to-bottom, and then calculates FLOPs/Memory using a bottom-to-top method.
 
 ## Critical Notes
-- Never write code unless explicitly requested by the user, prefer to give guidelines first.
+- Never directly write code. Instead, propose several available methods and think carefully before making any modifications.
+
+## Architecture Overview
+
+**Stage 1: Kernel Dependency Graph Extraction**
+- Build a structural dependency graph from model root to atomic kernels
+- Output: Nested JSON tree showing what calls what
+
+**Stage 2: Bottom-Up FLOPs/Memory Analysis**
+- Atomic kernels have hardcoded formulas (human-maintained)
+- Agent resolves parameters from child to parent context
+- Aggregate costs bottom-up from atomic kernels to root
 
 ## Key Files
-- `docs/DESIGN.md`: The design of this repo.
-- `module_analyzer_agent_sdk.py`: Module analysis script
-- `model_analyzer_agent_sdk.py`: Model analysis
-- `model_analyzer.py`: Main entry
-- `module_analysis_schema.json`: Analysis output schema
-- `prompts/`: Prompt templates for analysis
-- `modules/`: Module analysis dir
-- `models/`: Model analysis dir
+- `docs/DESIGN.md`: Detailed design documentation
+- `atomic_kernels.json`: Catalog of atomic kernels with hardcoded FLOPs/Memory formulas
+- `kernel_dependency_schema.json`: Schema for dependency graph output
+- `model_analyzer.py`: Model architecture inspection tool
+- `graph_extractor.py`: Stage 1 kernel dependency graph extractor
+- `prompts/`: Prompt templates for graph extraction and cost analysis
+- `utils/`: Utility modules for message printing and common functions
+- `graphs/`: Kernel dependency graphs output directory
+- `analysis/`: FLOPs/memory analysis output directory
 
 ## Common Workflows
 
-1. **Show Model Architecture**: Use `model_analyzer.py` with a HuggingFace model ID (e.g., `openai-community/gpt2`) to show its model architecture
-2. **Analyze Individual Modules**: Use `module_analyzer_agent_sdk.py` to analyze each module from the model
-3. **Aggregate Module Analysis**: Use `model_analyzer_agent_sdk.py` to aggregate all individual modules into a model analysis
-4. **Calculate FLOPs/Memory**: Use `model_analyzer.py` to calculate the FLOPs/memory access according to the analyzed model
+1. **Show Model Architecture**: Use `model_analyzer.py` with a HuggingFace model ID to inspect model structure
+2. **Extract Kernel Dependency Graph**: Build dependency graph from model to atomic kernels (Stage 1)
+3. **Compute FLOPs/Memory**: Bottom-up analysis using dependency graph and atomic kernel formulas (Stage 2)
 
 ## External Dependencies
 
-- **transformers/** submodule: HuggingFace Transformers source code for deep model introspection
-- **pytorch/** submodule: PyTorch source code for understanding low-level operations
+- **transformers/** submodule: HuggingFace Transformers source code for model introspection
+- **pytorch/** submodule: PyTorch source code for understanding operations
 - Use `uv` for Python environment management
