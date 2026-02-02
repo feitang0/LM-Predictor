@@ -441,6 +441,12 @@ Examples:
   # Benchmark specific model with custom parameters
   python tests/lm_perf.py --model_id facebook/opt-125m --max_batch_size 128 --max_seq_len 512
 
+  # Run only prefill phase
+  python tests/lm_perf.py --phase prefill
+
+  # Run only decode phase
+  python tests/lm_perf.py --phase decode
+
   # Save results to file
   python tests/lm_perf.py --model_id gpt2 --output results.json
 
@@ -490,6 +496,13 @@ Examples:
         default=None,
         help="Output file for results (JSON format)"
     )
+    parser.add_argument(
+        "--phase",
+        type=str,
+        choices=["both", "prefill", "decode"],
+        default="both",
+        help="Which phase(s) to benchmark: both, prefill, or decode (default: both)"
+    )
     return parser.parse_args()
 
 
@@ -514,27 +527,32 @@ def main():
     print(f"  Sequence lengths: {seq_lens}")
     print(f"  Warmup rounds: {args.warmup_rounds}")
     print(f"  Test rounds: {args.test_rounds}")
+    print(f"  Phase: {args.phase}")
 
-    # Run benchmarks
-    prefill_results = run_prefill_benchmark(
-        model, tokenizer, device, sync_fn,
-        batch_sizes, seq_lens,
-        args.warmup_rounds, args.test_rounds
-    )
+    # Run benchmarks based on selected phase
+    prefill_results = None
+    decode_results = None
 
-    decode_results = run_decode_benchmark(
-        model, tokenizer, device, sync_fn,
-        batch_sizes, seq_lens,  # Use same seq_lens as cache_lens
-        args.warmup_rounds, args.test_rounds
-    )
+    if args.phase in ["both", "prefill"]:
+        prefill_results = run_prefill_benchmark(
+            model, tokenizer, device, sync_fn,
+            batch_sizes, seq_lens,
+            args.warmup_rounds, args.test_rounds
+        )
+
+    if args.phase in ["both", "decode"]:
+        decode_results = run_decode_benchmark(
+            model, tokenizer, device, sync_fn,
+            batch_sizes, seq_lens,  # Use same seq_lens as cache_lens
+            args.warmup_rounds, args.test_rounds
+        )
 
     # Prepare output
     results = {
         "model_id": args.model_id,
         "device_type": device_type,
         "device": str(device),
-        "prefill_results": prefill_results,
-        "decode_results": decode_results,
+        "phase": args.phase,
         "sweep_params": {
             "batch_sizes": batch_sizes,
             "seq_lens": seq_lens
@@ -545,6 +563,12 @@ def main():
         }
     }
 
+    # Add phase results only if they were run
+    if prefill_results is not None:
+        results["prefill_results"] = prefill_results
+    if decode_results is not None:
+        results["decode_results"] = decode_results
+
     # Save to file if specified
     if args.output:
         with open(args.output, 'w') as f:
@@ -552,8 +576,10 @@ def main():
         print(f"\n✓ Results saved to: {args.output}")
     else:
         print("\n=== Summary ===")
-        print(f"Prefill: {len(prefill_results)} configurations tested")
-        print(f"Decode: {len(decode_results)} configurations tested")
+        if prefill_results is not None:
+            print(f"Prefill: {len(prefill_results)} configurations tested")
+        if decode_results is not None:
+            print(f"Decode: {len(decode_results)} configurations tested")
 
     print("\n✓ Benchmark complete!")
 
