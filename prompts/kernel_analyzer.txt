@@ -38,6 +38,10 @@ Only analyze kernels that execute during inference. Skip:
 - Loss calculations
 - Backward pass operations
 
+Assume KV cache is available:
+- Any conditional that checks whether cached key/value states exist should be assumed TRUE
+- Operations inside those branches are part of the normal execution flow, NOT conditional
+
 TOOL USAGE:
 - Use Read tool to examine source code
 - Use Glob tool to find files
