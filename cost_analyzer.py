@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Cost Analyzer - Stage 2 Phase 1 of LM-Predictor
+Cost Analyzer - Phase 1 of LM-Predictor
 
-Top-down BFS cost analysis. For each composite kernel in the Stage 1
-dependency graph, runs a Claude agent to produce an intermediate cost JSON
-with structured children and bindings. Leaf kernels (hand-written in
-kernels/) are seeded into the output costs directory; the agent only
-analyzes composite kernels that don't yet have a cost JSON.
+Self-driven top-down BFS cost analysis. Starting from a root module, runs a
+Claude agent for each kernel to discover children and write bindings. The
+agent's output drives the BFS — each new child kernel reference that doesn't
+already have a cost JSON is added to the queue.
+
+Hand-written leaf kernel JSONs (in kernels/) are seeded into the costs
+directory before BFS starts. Any kernel with an existing cost JSON is skipped.
 
 Usage:
     uv run python cost_analyzer.py \
-        --graph graphs/transformers.models.gpt2.modeling_gpt2.GPT2Attention.json \
+        --module transformers.models.gpt2.modeling_gpt2.GPT2Attention \
         --transformers ./transformers \
         --pytorch ./pytorch \
         --output ./analysis
@@ -48,42 +50,20 @@ def load_prompt_template(filename: str) -> str:
     return prompt_path.read_text()
 
 
-def load_leaf_kernel_names(kernels_dir: Path, name_map_path: Path) -> set[str]:
-    """Load leaf kernel names from the kernels/ directory and name map.
-
-    Returns a set containing:
-    - Short names from kernel JSON filenames (e.g. "F.softmax", "torch.matmul")
-    - Fully-qualified names that map to those short names (e.g. "torch.nn.functional.softmax")
-    """
-    names: set[str] = set()
-
-    # Collect short names from kernel JSON filenames
-    if kernels_dir.is_dir():
-        for json_file in kernels_dir.glob("*.json"):
-            short_name = json_file.stem  # e.g. "F.softmax"
-            names.add(short_name)
-
-    # Also add fully-qualified names from the name map
+def load_name_map(name_map_path: Path) -> dict[str, str]:
+    """Load the kernel name mapping (fully-qualified -> short name)."""
     if name_map_path.is_file():
         with open(name_map_path) as f:
-            name_map: dict[str, str] = json.load(f)
-        for fq_name, short_name in name_map.items():
-            # Only add the fq_name if the short_name actually exists as a leaf kernel
-            if short_name in names:
-                names.add(fq_name)
-
-    return names
+            return json.load(f)
+    return {}
 
 
-def seed_leaf_kernels(kernels_dir: Path, costs_dir: Path, name_map_path: Path) -> int:
+def seed_leaf_kernels(
+    kernels_dir: Path, costs_dir: Path, name_map: dict[str, str]
+) -> int:
     """Copy hand-written leaf kernel JSONs into the output costs directory.
 
     Also creates copies under fully-qualified names from the name map.
-    For example, if name_map says "torch.nn.functional.softmax" -> "F.softmax",
-    then kernels/F.softmax.json is copied to both:
-      - costs/F.softmax.json
-      - costs/torch.nn.functional.softmax.json
-
     Returns the number of files copied.
     """
     copied = 0
@@ -99,45 +79,41 @@ def seed_leaf_kernels(kernels_dir: Path, costs_dir: Path, name_map_path: Path) -
         copied += 1
 
     # Build reverse map: short_name -> [fq_name, ...]
-    if name_map_path.is_file():
-        with open(name_map_path) as f:
-            name_map: dict[str, str] = json.load(f)
+    reverse_map: dict[str, list[str]] = {}
+    for fq_name, short_name in name_map.items():
+        reverse_map.setdefault(short_name, []).append(fq_name)
 
-        reverse_map: dict[str, list[str]] = {}
-        for fq_name, short_name in name_map.items():
-            reverse_map.setdefault(short_name, []).append(fq_name)
-
-        # For each leaf kernel, create copies under fully-qualified names
-        for json_file in kernels_dir.glob("*.json"):
-            short_name = json_file.stem
-            for fq_name in reverse_map.get(short_name, []):
-                fq_dest = costs_dir / f"{fq_name}.json"
-                if not fq_dest.exists():
-                    shutil.copy2(json_file, fq_dest)
-                    copied += 1
+    # For each leaf kernel, create copies under fully-qualified names
+    for json_file in kernels_dir.glob("*.json"):
+        short_name = json_file.stem
+        for fq_name in reverse_map.get(short_name, []):
+            fq_dest = costs_dir / f"{fq_name}.json"
+            if not fq_dest.exists():
+                shutil.copy2(json_file, fq_dest)
+                copied += 1
 
     return copied
 
 
-def collect_composite_kernels_bfs(graph: dict, leaf_names: set[str]) -> list[str]:
-    """BFS through graph, return composite kernel names in top-down order (deduped)."""
-    order: list[str] = []
-    seen: set[str] = set()
-    queue: deque[dict] = deque([graph])
+def has_cost_json(kernel_name: str, costs_dir: Path, name_map: dict[str, str]) -> bool:
+    """Check if a kernel already has a cost JSON (under its own name or mapped name)."""
+    if (costs_dir / f"{kernel_name}.json").exists():
+        return True
+    # Check mapped name
+    resolved = name_map.get(kernel_name, kernel_name)
+    if resolved != kernel_name and (costs_dir / f"{resolved}.json").exists():
+        return True
+    return False
 
-    while queue:
-        node = queue.popleft()
-        name = node.get("kernel_name", "")
-        ktype = node.get("kernel_type", "")
 
-        if ktype == "composite" and name not in seen and name not in leaf_names:
-            seen.add(name)
-            order.append(name)
-
-        for child in node.get("sub_kernels", []):
-            queue.append(child)
-
-    return order
+def extract_child_kernels(cost_json_path: Path) -> list[str]:
+    """Read a cost JSON and return the list of child kernel names."""
+    with open(cost_json_path) as f:
+        data = json.load(f)
+    return [
+        child["kernel"]
+        for child in data.get("children", {}).values()
+    ]
 
 
 async def analyze_kernel(
@@ -150,7 +126,7 @@ async def analyze_kernel(
     schema: dict,
     working_dir: Path,
 ) -> bool:
-    """Run the Claude agent to analyze one composite kernel.
+    """Run the Claude agent to analyze one kernel.
 
     Returns True if the agent produced a valid cost JSON, False otherwise.
     """
@@ -158,7 +134,6 @@ async def analyze_kernel(
     print(f"Analyzing kernel: {kernel_name}")
     print(f"{'='*60}")
 
-    # Build prompt from template
     template = load_prompt_template("cost_analyzer.txt")
     prompt = template.format(
         kernel_name=kernel_name,
@@ -169,7 +144,6 @@ async def analyze_kernel(
         name_map_path=str(name_map_path),
     )
 
-    # Run Claude agent
     async for message in query(
         prompt=prompt,
         options=ClaudeAgentOptions(
@@ -181,7 +155,7 @@ async def analyze_kernel(
     ):
         print_pretty_message(message)
 
-    # Check and validate agent output
+    # Validate agent output
     output_file = costs_dir / f"{kernel_name}.json"
     if not output_file.exists():
         print(f"  WARNING: Agent did not produce output for {kernel_name}")
@@ -191,7 +165,7 @@ async def analyze_kernel(
         with open(output_file) as f:
             output = json.load(f)
         jsonschema.validate(output, schema)
-        print(f"  OK: {kernel_name} cost JSON validated successfully")
+        print(f"  OK: {kernel_name} validated successfully")
         return True
     except json.JSONDecodeError as e:
         print(f"  ERROR: Invalid JSON in {output_file}: {e}")
@@ -203,12 +177,12 @@ async def analyze_kernel(
 
 async def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Top-down BFS cost analysis (Stage 2 Phase 1)"
+        description="Phase 1: Top-down BFS cost analysis"
     )
     parser.add_argument(
-        "-g", "--graph",
+        "-m", "--module",
         required=True,
-        help="Path to kernel dependency graph JSON (Stage 1 output)",
+        help="Root module to analyze (e.g., transformers.models.gpt2.modeling_gpt2.GPT2Attention)",
     )
     parser.add_argument(
         "--transformers",
@@ -238,40 +212,38 @@ async def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     costs_dir.mkdir(exist_ok=True)
 
-    # Load the Stage 1 dependency graph
-    graph_path = Path(args.graph)
-    with open(graph_path) as f:
-        graph = json.load(f)
-
-    # Load schema for validation
+    # Load name map and schema
+    name_map = load_name_map(name_map_path)
     with open(schema_path) as f:
         schema = json.load(f)
 
-    # Step 1: Seed leaf kernels into costs directory
-    leaf_names = load_leaf_kernel_names(kernels_dir, name_map_path)
-    seeded_count = seed_leaf_kernels(kernels_dir, costs_dir, name_map_path)
+    # Seed leaf kernels
+    seeded_count = seed_leaf_kernels(kernels_dir, costs_dir, name_map)
 
-    print(f"Graph: {args.graph}")
+    print(f"Root module: {args.module}")
     print(f"Transformers dir: {args.transformers}")
     print(f"PyTorch dir: {args.pytorch}")
     print(f"Output dir: {output_dir}")
-    print(f"Leaf kernels: {len(leaf_names)} names ({seeded_count} files seeded)")
+    print(f"Leaf kernels seeded: {seeded_count} files")
 
-    # Step 2: BFS to collect composite kernels in top-down order
-    composite_kernels = collect_composite_kernels_bfs(graph, leaf_names)
-    print(f"Composite kernels to analyze: {len(composite_kernels)}")
-    for i, name in enumerate(composite_kernels, 1):
-        print(f"  {i}. {name}")
-
-    # Step 3: Analyze each composite kernel (skip if cost JSON already exists)
+    # Self-driven BFS
+    queue: deque[str] = deque([args.module])
+    analyzed: set[str] = set()
     results: dict[str, bool] = {}
-    for kernel_name in composite_kernels:
-        cost_file = costs_dir / f"{kernel_name}.json"
-        if cost_file.exists():
+
+    while queue:
+        kernel_name = queue.popleft()
+
+        if kernel_name in analyzed:
+            continue
+        analyzed.add(kernel_name)
+
+        # Skip if cost JSON already exists (leaf or previously analyzed)
+        if has_cost_json(kernel_name, costs_dir, name_map):
             print(f"\nSkipping {kernel_name}: cost JSON already exists")
-            results[kernel_name] = True
             continue
 
+        # Run agent
         success = await analyze_kernel(
             kernel_name=kernel_name,
             transformers_dir=args.transformers,
@@ -284,16 +256,24 @@ async def main() -> None:
         )
         results[kernel_name] = success
 
-    # Step 4: Print summary
+        # If agent succeeded, discover new children and add to queue
+        if success:
+            cost_file = costs_dir / f"{kernel_name}.json"
+            for child_kernel in extract_child_kernels(cost_file):
+                if child_kernel not in analyzed:
+                    queue.append(child_kernel)
+
+    # Summary
     succeeded = sum(1 for v in results.values() if v)
     failed = sum(1 for v in results.values() if not v)
 
     print(f"\n{'='*60}")
     print(f"Phase 1 Analysis Complete")
     print(f"{'='*60}")
-    print(f"  Total composite kernels: {len(composite_kernels)}")
+    print(f"  Kernels analyzed: {len(results)}")
     print(f"  Succeeded: {succeeded}")
     print(f"  Failed: {failed}")
+    print(f"  Kernels skipped (already exist): {len(analyzed) - len(results)}")
     print(f"  Costs directory: {costs_dir}")
 
     if failed > 0:
