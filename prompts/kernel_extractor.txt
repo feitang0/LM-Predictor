@@ -1,0 +1,17 @@
+<task>
+Extract all the tensor operations of the module {module_name}
+</task>
+
+<available_resources>
+{transformers}/: transformers library source dir
+{pytorch}/: pytorch library source dir
+{output_dir}/{module_name}.md: Write plan, thought, and anything
+</available_resources>
+
+<workflow>
+1. Find the source code from {transformers} or {pytorch} dir
+2. Analyze the next code block
+    a. Check whether it will be executed during the **INFERENCE** phase, if so, continue to analyze, else skip to next code block
+    b. Extract the kernel name if it is a direct tensor operation. If it is a module call, also extract the full class name
+    c. Continue to analyze next code block until to the end
+</workflow>

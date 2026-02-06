@@ -14,15 +14,17 @@ CRITICAL RULES:
 - Use `config.xxx` for model config attributes (these are implicit, shared globally)
 - Use `batch_size`, `seq_len`, `cache_len`, `bytes` as implicit runtime variables
 - Do NOT use `self.xxx` in bindings — resolve self.xxx to config.xxx or constructor arg names
+- When resolving `self.xxx` to `config.yyy`, trace the assignment in __init__ to find the ACTUAL config attribute name (e.g., `self.num_heads = config.num_attention_heads` → use `config.num_attention_heads`, NOT `config.num_heads`)
 - Zero-cost operations (view, reshape, permute, transpose, contiguous, split, cat) can be SKIPPED
 
 INFERENCE ASSUMPTIONS:
 - KV cache is available (conditionals checking for cache → TRUE)
 - batch_size for batch dimension
 - seq_len for current sequence length (1 during decode, full during prefill)
-- cache_len for KV cache sequence length
+- cache_len for PAST-ONLY KV cache length (does NOT include current tokens). Total key length in attention = cache_len + seq_len
 - Boolean params (has_bias): resolve to 1 or 0
 - Inference mode (skip training-only branches, dropout = no-op but still include as child)
+- Assume DEFAULT config values for conditional branches. Skip non-default paths (e.g., cross-attention in decoder-only models, experimental/optional optimizations). Only model the standard inference path.
 </role_definition>
 
 <task>
@@ -116,45 +118,30 @@ Example — Conv1D (composite that delegates to torch.addmm):
   }}
 }}
 
-Example — attention module with inline ops:
+Example — MLP module with activation and dropout:
 {{
-  "kernel_name": "SomeAttention",
+  "kernel_name": "SomeMLP",
   "init_params": [],
   "forward_params": [],
   "children": {{
-    "q_proj": {{
+    "up_proj": {{
       "kernel": "F.linear",
-      "bindings": {{ "M": "batch_size * seq_len", "K": "config.hidden_size", "N": "config.hidden_size", "has_bias": "1" }},
+      "bindings": {{ "M": "batch_size * seq_len", "K": "config.hidden_size", "N": "config.intermediate_size", "has_bias": "1" }},
       "count": 1
     }},
-    "scale_query": {{
-      "kernel": "torch.div",
-      "bindings": {{ "num_elements": "batch_size * seq_len * config.hidden_size" }},
+    "activation": {{
+      "kernel": "F.gelu",
+      "bindings": {{ "num_elements": "batch_size * seq_len * config.intermediate_size" }},
       "count": 1
     }},
-    "qk_matmul": {{
-      "kernel": "torch.matmul",
-      "bindings": {{ "M": "batch_size * config.num_heads * seq_len", "K": "config.hidden_size // config.num_heads", "N": "cache_len" }},
+    "down_proj": {{
+      "kernel": "F.linear",
+      "bindings": {{ "M": "batch_size * seq_len", "K": "config.intermediate_size", "N": "config.hidden_size", "has_bias": "1" }},
       "count": 1
     }},
-    "softmax": {{
-      "kernel": "F.softmax",
-      "bindings": {{ "num_elements": "batch_size * config.num_heads * seq_len * cache_len" }},
-      "count": 1
-    }},
-    "attn_dropout": {{
+    "dropout": {{
       "kernel": "F.dropout",
       "bindings": {{}},
-      "count": 1
-    }},
-    "av_matmul": {{
-      "kernel": "torch.matmul",
-      "bindings": {{ "M": "batch_size * config.num_heads * seq_len", "K": "cache_len", "N": "config.hidden_size // config.num_heads" }},
-      "count": 1
-    }},
-    "o_proj": {{
-      "kernel": "F.linear",
-      "bindings": {{ "M": "batch_size * seq_len", "K": "config.hidden_size", "N": "config.hidden_size", "has_bias": "0" }},
       "count": 1
     }}
   }}
