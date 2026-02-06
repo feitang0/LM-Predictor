@@ -1,0 +1,8 @@
+{
+  "kernel_name": "torch.baddbmm",
+  "init_params": [],
+  "forward_params": ["B", "M", "K", "N"],
+  "flops": "2 * B * M * K * N + B * M * N",
+  "memory_read": "B * (M * K + K * N + M * N) * bytes",
+  "memory_write": "B * M * N * bytes"
+}

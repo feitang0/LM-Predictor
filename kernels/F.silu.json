@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.silu",
+  "init_params": [],
+  "forward_params": ["num_elements"],
+  "flops": "num_elements",
+  "memory_read": "num_elements * bytes",
+  "memory_write": "num_elements * bytes"
+}

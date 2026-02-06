@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.embedding",
+  "init_params": [],
+  "forward_params": ["num_lookups", "embed_dim"],
+  "flops": "0",
+  "memory_read": "num_lookups * 4 + num_lookups * embed_dim * bytes",
+  "memory_write": "num_lookups * embed_dim * bytes"
+}

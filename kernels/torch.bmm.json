@@ -1,0 +1,8 @@
+{
+  "kernel_name": "torch.bmm",
+  "init_params": [],
+  "forward_params": ["B", "M", "K", "N"],
+  "flops": "2 * B * M * K * N",
+  "memory_read": "B * (M * K + K * N) * bytes",
+  "memory_write": "B * M * N * bytes"
+}

@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.dropout",
+  "init_params": [],
+  "forward_params": [],
+  "flops": "0",
+  "memory_read": "0",
+  "memory_write": "0"
+}

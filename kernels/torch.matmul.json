@@ -1,0 +1,8 @@
+{
+  "kernel_name": "torch.matmul",
+  "init_params": [],
+  "forward_params": ["M", "K", "N"],
+  "flops": "2 * M * K * N",
+  "memory_read": "(M * K + K * N) * bytes",
+  "memory_write": "M * N * bytes"
+}

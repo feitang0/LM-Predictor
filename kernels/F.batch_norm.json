@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.batch_norm",
+  "init_params": [],
+  "forward_params": ["num_elements", "num_features", "has_affine", "training"],
+  "flops": "num_elements * (5 if has_affine else 4) if training else num_elements * (2 if has_affine else 1)",
+  "memory_read": "num_elements * bytes + (4 * num_features) * bytes",
+  "memory_write": "num_elements * bytes"
+}

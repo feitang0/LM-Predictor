@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.linear",
+  "init_params": [],
+  "forward_params": ["M", "K", "N", "has_bias"],
+  "flops": "2 * M * K * N + M * N * has_bias",
+  "memory_read": "(M * K + K * N + N * has_bias) * bytes",
+  "memory_write": "M * N * bytes"
+}

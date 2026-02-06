@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.layer_norm",
+  "init_params": [],
+  "forward_params": ["num_elements", "norm_size", "has_affine"],
+  "flops": "num_elements * (5 if has_affine else 4)",
+  "memory_read": "num_elements * bytes + (2 * norm_size * has_affine) * bytes",
+  "memory_write": "num_elements * bytes"
+}

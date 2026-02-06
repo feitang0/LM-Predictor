@@ -1,0 +1,8 @@
+{
+  "kernel_name": "torch.add",
+  "init_params": [],
+  "forward_params": ["num_elements"],
+  "flops": "num_elements",
+  "memory_read": "2 * num_elements * bytes",
+  "memory_write": "num_elements * bytes"
+}

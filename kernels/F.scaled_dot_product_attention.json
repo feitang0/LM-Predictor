@@ -1,0 +1,8 @@
+{
+  "kernel_name": "F.scaled_dot_product_attention",
+  "init_params": [],
+  "forward_params": ["B", "H", "S_q", "S_kv", "D"],
+  "flops": "2 * B * H * S_q * D * S_kv + 2 * B * H * S_q * S_kv * D",
+  "memory_read": "(B * H * S_q * D + B * H * S_kv * D + B * H * S_kv * D) * bytes",
+  "memory_write": "B * H * S_q * D * bytes"
+}
