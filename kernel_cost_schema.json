@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kernel Cost (Intermediate)",
+  "type": "object",
+  "required": ["kernel_name", "init_params", "forward_params"],
+  "properties": {
+    "kernel_name": { "type": "string" },
+    "init_params": { "type": "array", "items": { "type": "string" } },
+    "forward_params": { "type": "array", "items": { "type": "string" } }
+  },
+  "oneOf": [
+    {
+      "title": "Leaf kernel",
+      "required": ["flops", "memory_read", "memory_write"],
+      "not": { "required": ["children"] },
+      "properties": {
+        "flops": { "type": "string" },
+        "memory_read": { "type": "string" },
+        "memory_write": { "type": "string" }
+      }
+    },
+    {
+      "title": "Composite kernel",
+      "required": ["children"],
+      "not": {
+        "anyOf": [
+          { "required": ["flops"] },
+          { "required": ["memory_read"] },
+          { "required": ["memory_write"] }
+        ]
+      },
+      "properties": {
+        "children": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": ["kernel", "bindings"],
+            "properties": {
+              "kernel": { "type": "string" },
+              "bindings": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "count": {
+                "oneOf": [
+                  { "type": "integer", "minimum": 1 },
+                  { "type": "string" }
+                ],
+                "default": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ]
+}
